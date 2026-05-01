@@ -10,6 +10,7 @@ import { decide } from '../agent/brain.js';
 import { proxyCall } from './llm-proxy.js';
 import { genomeToSystemPrompt } from '../agent/genome.js';
 import type { Config } from '../config/index.js';
+import { execSync } from 'node:child_process';
 import { ensureDir, safeWriteJSON } from '../shared/filesystem.js';
 import type { AgentState } from '../shared/types.js';
 
@@ -153,6 +154,7 @@ export class Supervisor extends EventEmitter {
     }
 
     await this.scanProposals();
+    await this.checkEmailReplies();
     const totalFitness = alive.reduce((s, a) => s + a.fitness, 0);
     const avgFitness = alive.length > 0 ? (totalFitness / alive.length).toFixed(1) : '0';
     console.log(`  📊 ${alive.length} alive, avg fitness: ${avgFitness}`);
@@ -183,6 +185,40 @@ export class Supervisor extends EventEmitter {
       await this.eventLog.append({ type: 'agent_extinct', agentId: 'supervisor', data: { action: 'shutdown' } });
     }
     this.started = false;
+  }
+
+  private async checkEmailReplies(): Promise<void> {
+    try {
+      const script = '/Users/zifengyang/.openclaw/workspace/scripts/check_email_replies.py';
+      const output = execSync('python3 ' + script + ' 2>/dev/null', { timeout: 10000 }).toString().trim();
+      if (!output) return;
+      const replies = JSON.parse(output) as Array<{uid: string; subject: string; body: string}>;
+      if (replies.length === 0) return;
+
+      for (const reply of replies) {
+        const body = reply.body.toLowerCase().trim();
+        const approved = body.startsWith('approve') || body.startsWith('同意') || body.startsWith('批准');
+        const rejected = body.startsWith('reject') || body.startsWith('拒绝') || body.startsWith('不同意');
+
+        if (approved) {
+          const pending = await this.proposalManager.getPendingProposals();
+          for (const p of pending) {
+            await this.proposalManager.approveProposal(p.id, 'user');
+            console.log('  ✅ Email approved:', p.agentId, p.title);
+            await this.eventLog.append({ type: 'proposal_created', agentId: p.agentId, data: { action: 'approved_via_email', proposalId: p.id } });
+          }
+        } else if (rejected) {
+          const pending = await this.proposalManager.getPendingProposals();
+          for (const p of pending) {
+            const reason = body.replace(/^reject\s*/i, '').replace(/^拒绝\s*/, '').trim() || '用户拒绝';
+            await this.proposalManager.rejectProposal(p.id, reason, 'user');
+            console.log('  ❌ Email rejected:', p.agentId, p.title);
+          }
+        }
+      }
+    } catch (err: unknown) {
+      // Silently fail - email checking is best-effort
+    }
   }
 
   getEventLog() { return this.eventLog; }

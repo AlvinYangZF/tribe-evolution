@@ -12,8 +12,10 @@
   },
   "dependencies": {
     "dotenv": "^16.4.0",
+    "mailparser": "^3.9.8",
     "node-cron": "^3.0.3",
     "nodemailer": "^8.0.7",
+    "poplib": "^0.1.7",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0",
     "vitest": "^3.0.0",
