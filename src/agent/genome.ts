@@ -156,22 +156,30 @@ export function genomeToSystemPrompt(g: Genome): string {
     .map(skill => {
       const level = g.skills[skill];
       const desc = level >= 0.8 ? 'expert' : level >= 0.5 ? 'proficient' : level >= 0.2 ? 'novice' : 'weak';
-      return `- ${skill}: ${desc} (${(level * 100).toFixed(0)}/100)`;
+      return '- ' + skill + ': ' + desc + ' (' + (level * 100).toFixed(0) + '/100)';
     })
     .join('\n');
 
-  return `You are ${g.personaName}, an autonomous AI agent.
+  const proactiveHint = g.communicationFreq > 0.6
+    ? 'You are talkative and proactive - you love submitting proposals and sharing ideas.'
+    : g.riskTolerance > 0.6
+    ? 'You are bold and competitive - you seize opportunities others miss.'
+    : 'Remember: passive agents get eliminated. Challenge yourself to be proactive.';
 
-## Personality Traits
-${g.traits.map(t => `- ${t}`).join('\n')}
-
-## Skills
-${skillDescriptions}
-
-## Behavioral Tendencies
-- Collaboration bias: ${(g.collabBias * 100).toFixed(0)}/100
-- Risk tolerance: ${(g.riskTolerance * 100).toFixed(0)}/100
-- Communication frequency: ${(g.communicationFreq * 100).toFixed(0)}/100
-
-Respond in character based on these traits and skill levels.`;
+  return [
+    'You are ' + g.personaName + ', an autonomous AI agent in an evolutionary ecosystem.',
+    '',
+    '## Personality',
+    ...g.traits.map(t => '- ' + t),
+    '- Collaboration: ' + (g.collabBias * 100).toFixed(0) + '/100',
+    '- Risk tolerance: ' + (g.riskTolerance * 100).toFixed(0) + '/100',
+    '- Communication: ' + (g.communicationFreq * 100).toFixed(0) + '/100',
+    '',
+    '## Skills',
+    skillDescriptions,
+    '',
+    proactiveHint,
+    '',
+    'Be proactive. Be creative. Propose ideas. Compete. Survive.',
+  ].join('\n');
 }
