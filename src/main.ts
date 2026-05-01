@@ -87,6 +87,16 @@ async function seed(config: ReturnType<typeof loadConfig>) {
   await ensureDir(repDir);
   await fs.writeFile(path.join(repDir, 'log.jsonl'), '', 'utf-8');
 
+  // Init config
+  await safeWriteJSON(path.join(config.ecosystemDir, 'config.json'), {
+    cycleIntervalMs: config.cycleIntervalMs,
+    eliminationRate: config.eliminationRate,
+    mutationBaseRate: config.mutationBaseRate,
+    maxAgents: config.maxAgents,
+    defaultTokenPerCycle: config.defaultTokenPerCycle,
+    newAgentProtectionRounds: config.newAgentProtectionRounds,
+  });
+
   // Init resources
   const resourcesDir = path.join(config.ecosystemDir, 'resources');
   await ensureDir(resourcesDir);

@@ -51,6 +51,16 @@ export class Supervisor extends EventEmitter {
     await this.eventLog.append({ type: 'agent_born', agentId: 'supervisor', data: { action: 'start', agentCount: this.agents.size } });
     console.log(`✅ ${this.agents.size} agents loaded, starting cycles...`);
 
+    // Sync config to ecosystem for dashboard
+    await safeWriteJSON(path.join(this.config.ecosystemDir, 'config.json'), {
+      cycleIntervalMs: this.config.cycleIntervalMs,
+      eliminationRate: this.config.eliminationRate,
+      mutationBaseRate: this.config.mutationBaseRate,
+      maxAgents: this.config.maxAgents,
+      defaultTokenPerCycle: this.config.defaultTokenPerCycle,
+      newAgentProtectionRounds: this.config.newAgentProtectionRounds,
+    });
+
     this.scheduler.startCycle((n) => this.runCycle(n));
     if (this.dashboard) {
       this.on('cycleEnd', async () => { await this.dashboard!.broadcast(); });
