@@ -1,0 +1,25 @@
+{
+  "name": "tribe-evolution",
+  "version": "0.1.0",
+  "description": "Agent ecosystem that evolves through natural selection",
+  "type": "module",
+  "scripts": {
+    "seed": "tsx src/main.ts seed",
+    "start": "tsx src/main.ts",
+    "dev": "tsx watch src/main.ts",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0",
+    "node-cron": "^3.0.3",
+    "zod": "^3.24.0",
+    "dotenv": "^16.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/node-cron": "^3.0.11"
+  }
+}
