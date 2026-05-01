@@ -108,7 +108,7 @@ async function start(config: ReturnType<typeof loadConfig>) {
   // Graceful shutdown
   const shutdown = async () => {
     console.log('\n\n⏹️  Shutting down...');
-    await supervisor.stop();
+    await supervisor.shutdown();
     process.exit(0);
   };
   process.on('SIGINT', shutdown);
