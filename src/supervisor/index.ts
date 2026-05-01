@@ -134,6 +134,33 @@ export class Supervisor extends EventEmitter {
         agent.contributionScore = score;
         const reason = (decision.reasoning ?? '').slice(0, 60);
         console.log(`  🧠 ${agent.id} (${g.personaName}): ${decision.action} — ${reason}`);
+
+        // When agent chooses 'propose', actually create a proposal
+        if (decision.action === 'propose') {
+          const title = (decision.reasoning ?? '新提案').slice(0, 80);
+          try {
+            const proposal = await this.proposalManager.createProposal(agent.id, {
+              type: 'task_suggestion',
+              title,
+              description: decision.reasoning ?? 'Agent 提出了一个新想法',
+              expectedBenefit: '提升生态效率',
+              tokenCost: 3000,
+              tokenReward: 5000,
+            });
+            // Email user immediately
+            notifyUser({
+              agentId: agent.id,
+              type: 'task_suggestion',
+              title,
+              description: decision.reasoning,
+              tokenCost: 3000,
+              proposalId: proposal.id,
+            }).catch(() => {});
+            console.log(`  📩 Proposal created & emailed: ${proposal.id}`);
+          } catch (e) {
+            // proposal creation failed, don't break the cycle
+          }
+        }
       } catch (err: unknown) {
         const m = err instanceof Error ? err.message : String(err);
         console.warn(`  ⚠️ ${agent.id} LLM error: ${m.slice(0, 80)}`);
