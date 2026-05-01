@@ -20,7 +20,7 @@ const COMMAND = process.argv[2] || 'start';
 async function seed(config: ReturnType<typeof loadConfig>) {
   console.log('🌱 Seeding initial population...\n');
 
-  const agentsDir = path.join(config.ecosystemDir, 'genomes', 'alive');
+  const agentsDir = path.join(config.ecosystemDir, 'agents');
   await ensureDir(agentsDir);
 
   const roleTemplates = [
@@ -47,12 +47,10 @@ async function seed(config: ReturnType<typeof loadConfig>) {
     genome.communicationFreq = template.commFreq;
 
     const agentId = `agent_${String(i + 1).padStart(3, '0')}`;
-    const agentDir = path.join(agentsDir, agentId);
-    await ensureDir(agentDir);
-
-    await safeWriteJSON(path.join(agentDir, 'genome.json'), genome);
-    await safeWriteJSON(path.join(agentDir, 'state.json'), {
+    const agentFile = path.join(agentsDir, agentId + '.json');
+    await safeWriteJSON(agentFile, {
       id: agentId,
+      genome,
       generation: 0,
       parentId: null,
       tokenBalance: config.defaultTokenPerCycle,
@@ -65,11 +63,6 @@ async function seed(config: ReturnType<typeof loadConfig>) {
       alive: true,
       protectionRounds: config.newAgentProtectionRounds,
       createdAt: Date.now(),
-    });
-    await safeWriteJSON(path.join(agentDir, 'memory.json'), {
-      experiences: [],
-      skillsUsed: [],
-      interactions: [],
     });
 
     console.log(`  🧬 ${agentId} — ${genome.personaName} (${genome.traits.join(', ')})`);
