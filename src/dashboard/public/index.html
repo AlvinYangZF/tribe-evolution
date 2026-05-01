@@ -991,194 +991,152 @@ function updateMarket(market) {
 }
 
 // ── Evolution Tree ──
-const ROLE_TREE_COLORS = {
-  'Explorer': '#58a6ff',
-  'Worker': '#39d353',
-  'Trader': '#d29922',
-  'Creator': '#bc8cff',
-  'Guardian': '#f85149',
-  'Helper': '#79c0ff',
-  'Scholar': '#e3b341',
-  'Herder': '#3fb950',
-  'Researcher': '#58a6ff',
-  'Builder': '#39d353',
+const ROLE_COLORS_MAP = {
+  'Explorer': '#58a6ff', 'Worker': '#39d353', 'Creator': '#bc8cff',
+  'Observer': '#f0883e', 'Hunter': '#f85149', 'Merchant': '#d2a8ff',
+  'Scientist': '#79c0ff', 'Guardian': '#3fb950', 'Scout': '#ff7b72',
+  'Diplomat': '#a5d6ff',
 };
 
-function getTreeRoleColor(role) {
-  return ROLE_TREE_COLORS[role] || '#8b949e';
+function getColor(role) { return ROLE_COLORS_MAP[role] || '#8b949e'; }
+function fitnessColor(f) {
+  if (f > 70) return '#39d353';
+  if (f > 40) return '#d29922';
+  return '#f85149';
 }
 
 async function loadTree() {
   const svg = document.getElementById('tree-svg');
-  const tooltip = document.getElementById('tree-tooltip');
   const container = document.getElementById('tree-container');
-
+  if (!svg) return;
+  
   try {
     const res = await fetch('/api/tree');
-    if (!res.ok) {
-      svg.innerHTML = '';
-      return;
-    }
+    if (!res.ok) { svg.innerHTML = ''; return; }
     const { nodes } = await res.json();
-    if (!nodes || nodes.length === 0) {
-      svg.innerHTML = '';
-      return;
-    }
+    if (!nodes || nodes.length === 0) { svg.innerHTML = '<text x="50%" y="50%" text-anchor="middle" fill="#8b949e" font-size="14">No agents yet</text>'; return; }
 
-    // Build tree structure
+    // Build tree
     const children = {};
     let roots = [];
-    for (const node of nodes) {
-      if (node.parentId === null) {
-        roots.push(node);
-      } else {
-        if (!children[node.parentId]) children[node.parentId] = [];
-        children[node.parentId].push(node);
-      }
+    for (const n of nodes) {
+      if (n.parentId === null) roots.push(n);
+      else { if (!children[n.parentId]) children[n.parentId] = []; children[n.parentId].push(n); }
     }
 
-    // Calculate layout
-    const nodeRadius = 20;
-    const levelHeight = 100;
-    const minHorizontalSpacing = 80;
-    const paddingX = 40;
-    const paddingY = 30;
+    // Layout params
+    const cardW = 120, cardH = 44, levelH = 120, hGap = 20, padX = 60, padY = 40;
+    const defs = [];
 
-    // Assign x positions using DFS
-    function layoutTree(nodeList, depth, xOffset) {
-      let totalWidth = 0;
-      const positioned = [];
-
-      for (const node of nodeList) {
-        const nodeChildren = children[node.id] || [];
-        let subWidth;
-        let childPositions;
-
-        if (nodeChildren.length === 0) {
-          subWidth = minHorizontalSpacing;
-          childPositions = [];
-        } else {
-          const result = layoutTree(nodeChildren, depth + 1, 0);
-          childPositions = result.nodes;
-          subWidth = result.totalWidth;
-        }
-
-        // Center this node above its children, or use default spacing
-        let nodeX;
-        if (childPositions.length > 0) {
-          const firstX = childPositions[0].x;
-          const lastX = childPositions[childPositions.length - 1].x;
-          nodeX = (firstX + lastX) / 2;
-        } else {
-          nodeX = subWidth / 2;
-        }
-
-        positioned.push({ node, x: nodeX + xOffset, y: depth * levelHeight + paddingY, children: childPositions });
-        xOffset += subWidth;
-        totalWidth += subWidth;
+    // Layout
+    function layout(nodes, depth, xOff) {
+      let tw = 0, pos = [];
+      for (const n of nodes) {
+        const kids = children[n.id] || [];
+        let sw, cp;
+        if (kids.length === 0) { sw = cardW + hGap; cp = []; }
+        else { const r = layout(kids, depth + 1, 0); cp = r.pos; sw = r.tw; }
+        const nx = cp.length > 0 ? (cp[0].x + cp[cp.length - 1].x) / 2 : sw / 2;
+        pos.push({ n, x: nx + xOff, y: depth * levelH + padY, kids: cp });
+        xOff += sw; tw += sw;
       }
-
-      return { nodes: positioned, totalWidth: Math.max(totalWidth, paddingX * 2) };
+      return { pos, tw: Math.max(tw, padX * 2) };
     }
 
-    const layout = layoutTree(roots, 0, paddingX);
-    const svgWidth = Math.max(layout.totalWidth, 600);
-    const svgHeight = (roots.length > 0 ? 1 : 0) * levelHeight + paddingY * 2 + 50;
-    // Estimate max depth
-    let maxDepth = 0;
-    function measureDepth(nodeList, d) {
-      for (const n of nodeList) {
-        maxDepth = Math.max(maxDepth, d);
-        const nc = children[n.id] || [];
-        if (nc.length > 0) measureDepth(nc, d + 1);
-      }
-    }
-    measureDepth(roots, 0);
-    const finalHeight = (maxDepth + 1) * levelHeight + paddingY * 2 + 30;
-
-    svg.setAttribute('viewBox', `0 0 ${svgWidth} ${finalHeight}`);
+    const layout = layout(roots, 0, padX);
+    let md = 0;
+    (function mdepth(ns, d) { for (const p of ns) { md = Math.max(md, d); if (p.kids.length) mdepth(p.kids, d + 1); } })(layout.pos, 0);
+    const svgW = Math.max(layout.tw, 600), svgH = (md + 1) * levelH + padY * 2 + 20;
+    svg.setAttribute('viewBox', "0 0 " + svgW + " " + svgH);
     svg.setAttribute('width', '100%');
-    svg.setAttribute('height', finalHeight);
 
-    // Build SVG content
-    let svgContent = '';
-    let lines = '';
-    let circles = '';
+    // Collect all
+    let all = [];
+    (function collect(ps) { for (const p of ps) { all.push(p); if (p.kids.length) collect(p.kids); } })(layout.pos);
 
-    // Collect all positioned nodes
-    const allPositions = [];
-    function collectPositions(posList) {
-      for (const p of posList) {
-        allPositions.push(p);
-        if (p.children && p.children.length > 0) collectPositions(p.children);
-      }
+    // Gradient defs
+    let defsHtml = '<defs>';
+    for (const p of all) {
+      const c = getColor(p.n.personaName);
+      defsHtml += '<linearGradient id="g' + p.n.id.replace(/[^a-zA-Z0-9]/g,'') + '" x1="0%" y1="0%" x2="100%" y2="100%">';
+      defsHtml += '<stop offset="0%" stop-color="' + c + '" stop-opacity="0.85"/>';
+      defsHtml += '<stop offset="100%" stop-color="' + c + '" stop-opacity="0.6"/>';
+      defsHtml += '</linearGradient>';
     }
-    collectPositions(layout.nodes);
+    defsHtml += '<filter id="shadow"><feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#000" flood-opacity="0.3"/></filter>';
+    defsHtml += '<filter id="glow"><feDropShadow dx="0" dy="0" stdDeviation="4" flood-color="currentColor" flood-opacity="0.2"/></filter>';
+    defsHtml += '</defs>';
 
-    // Draw lines first
-    for (const p of allPositions) {
-      if (p.children && p.children.length > 0) {
-        const childYs = p.children.map(c => c.y);
-        const minChildY = Math.min(...childYs);
-        const maxChildY = Math.max(...childYs);
-        if (p.children.length === 1) {
-          // Single child: straight line
-          lines += `<line x1="${p.x}" y1="${p.y + nodeRadius}" x2="${p.children[0].x}" y2="${p.children[0].y - nodeRadius}" stroke="#30363d" stroke-width="2"/>`;
-        } else {
-          // Multiple children: vertical line + horizontal connector
-          const midY = p.y + nodeRadius + 25;
-          lines += `<line x1="${p.x}" y1="${p.y + nodeRadius}" x2="${p.x}" y2="${midY}" stroke="#30363d" stroke-width="2"/>`;
-          const firstX = p.children[0].x;
-          const lastX = p.children[p.children.length - 1].x;
-          lines += `<line x1="${firstX}" y1="${midY}" x2="${lastX}" y2="${midY}" stroke="#30363d" stroke-width="2"/>`;
-          for (const child of p.children) {
-            lines += `<line x1="${child.x}" y1="${midY}" x2="${child.x}" y2="${child.y - nodeRadius}" stroke="#30363d" stroke-width="2"/>`;
-          }
+    // Lines
+    let lines = '';
+    for (const p of all) {
+      if (!p.kids.length) continue;
+      const my = p.y + cardH;
+      if (p.kids.length === 1) {
+        const k = p.kids[0];
+        lines += '<line class="tree-line" x1="' + p.x + '" y1="' + my + '" x2="' + k.x + '" y2="' + (k.y - 4) + '"/>';
+      } else {
+        const my2 = my + 15;
+        lines += '<line class="tree-line" x1="' + p.x + '" y1="' + my + '" x2="' + p.x + '" y2="' + my2 + '"/>';
+        const fx = p.kids[0].x, lx = p.kids[p.kids.length-1].x;
+        lines += '<line class="tree-line" x1="' + fx + '" y1="' + my2 + '" x2="' + lx + '" y2="' + my2 + '"/>';
+        for (const k of p.kids) {
+          lines += '<line class="tree-line" x1="' + k.x + '" y1="' + my2 + '" x2="' + k.x + '" y2="' + (k.y - 4) + '"/>';
         }
       }
     }
 
-    // Draw nodes
-    for (const p of allPositions) {
-      const node = p.node;
-      const color = getTreeRoleColor(node.personaName);
-      const radius = Math.max(10, Math.min(28, 10 + node.fitness * 0.2));
-      const opacity = node.alive ? 1 : 0.4;
-      const strokeWidth = node.alive ? 2 : 1;
+    // Nodes as cards
+    let nodes = '';
+    for (const p of all) {
+      const n = p.n;
+      const c = getColor(n.personaName);
+      const alive = n.alive !== false;
+      const op = alive ? 1 : 0.35;
+      const gradId = 'g' + n.id.replace(/[^a-zA-Z0-9]/g,'');
+      const x = p.x - cardW / 2, y = p.y;
+      const fc = fitnessColor(n.fitness);
+      const shortId = n.id.replace('agent_', 'A');
 
-      const initial = node.personaName.charAt(0).toUpperCase();
-      const labelY = p.y + radius + 14;
-
-      circles += `
-        <g style="cursor:pointer"
-           onmouseenter="showTreeTooltip('${node.id}', '${node.personaName}', ${node.generation}, ${node.fitness}, ${node.alive})"
-           onmouseleave="hideTreeTooltip()">
-          <circle cx="${p.x}" cy="${p.y}" r="${radius}" fill="${color}" fill-opacity="${opacity}" stroke="${color}" stroke-width="${strokeWidth}" stroke-opacity="${opacity}"/>
-          <text x="${p.x}" y="${p.y}" text-anchor="middle" dominant-baseline="central" fill="#fff" font-size="${radius > 18 ? 14 : 11}" font-weight="bold" opacity="${opacity}">${initial}</text>
-          <text x="${p.x}" y="${labelY}" text-anchor="middle" fill="#8b949e" font-size="11" opacity="${opacity}">${node.id.replace('agent_', '')}</text>
-        </g>`;
+      nodes += '<g class="tree-node" opacity="' + op + '" onclick="showTreeDetail('' + n.id + '','' + n.personaName + '',' + n.generation + ',' + n.fitness + ',' + alive + ')">';
+      // Card background
+      nodes += '<rect x="' + x + '" y="' + y + '" width="' + cardW + '" height="' + cardH + '" rx="8" fill="url(#' + gradId + ')" stroke="' + (alive ? c : '#30363d') + '" stroke-width="' + (alive ? 2 : 1) + '" filter="url(#shadow)"/>';
+      // Fitness bar at bottom
+      const barW = Math.max(4, (n.fitness / 100) * (cardW - 16));
+      nodes += '<rect x="' + (x + 8) + '" y="' + (y + cardH - 8) + '" width="' + barW + '" height="3" rx="1.5" fill="' + fc + '" opacity="0.8"/>';
+      // Role name
+      nodes += '<text x="' + (x + 8) + '" y="' + (y + 17) + '" fill="#fff" font-size="12" font-weight="600">' + n.personaName + '</text>';
+      // ID + fitness
+      nodes += '<text x="' + (x + cardW - 8) + '" y="' + (y + 17) + '" fill="#8b949e" font-size="10" text-anchor="end">' + shortId + '</text>';
+      // Fitness value
+      nodes += '<text x="' + (x + 8) + '" y="' + (y + 32) + '" fill="' + fc + '" font-size="11" font-weight="600">' + (n.fitness ? n.fitness.toFixed(1) : '0') + '</text>';
+      // Gen
+      nodes += '<text x="' + (x + cardW - 8) + '" y="' + (y + 32) + '" fill="#8b949e" font-size="10" text-anchor="end">G' + n.generation + '</text>';
+      nodes += '</g>';
     }
 
-    svg.innerHTML = lines + circles;
+    svg.innerHTML = defsHtml + lines + nodes;
   } catch (err) {
-    console.error('Failed to load tree:', err);
+    console.error('Tree failed:', err);
   }
 }
 
-let tooltipTimeout = null;
-
-function showTreeTooltip(id, name, generation, fitness, alive) {
+function showTreeDetail(id, name, gen, fitness, alive) {
   const tooltip = document.getElementById('tree-tooltip');
-  tooltip.innerHTML = `
-    <div class="tt-name">${name} (${id})</div>
-    <div class="tt-row">🧬 Generation: ${generation}</div>
-    <div class="tt-row">💪 Fitness: ${fitness.toFixed(1)}</div>
-    <div class="tt-row ${alive ? 'tt-alive' : 'tt-dead'}">${alive ? '✅ Alive' : '💀 Extinct'}</div>
-  `;
+  if (!tooltip) return;
+  const c = ROLE_COLORS_MAP[name] || '#8b949e';
+  tooltip.innerHTML = '<div class="tt-name">' + name + ' <span class="tt-row">(' + id + ')</span></div>'
+    + '<div class="tt-row"><span class="tt-label">Generation</span> ' + gen + '</div>'
+    + '<div class="tt-row"><span class="tt-label">Fitness</span> <span class="tt-fitness">' + (fitness ? fitness.toFixed(1) : '0') + '</span></div>'
+    + '<div class="tt-row"><span class="tt-label">Status</span> <span class="' + (alive ? 'tt-alive' : 'tt-dead') + '">' + (alive ? '✅ Alive' : '💀 Extinct') + '</span></div>'
+    + '<div style="margin-top:6px"><span class="tt-role-badge" style="background:' + c + '">' + name + '</span></div>';
   tooltip.classList.add('visible');
 }
 
 function hideTreeTooltip() {
+  const t = document.getElementById('tree-tooltip');
+  if (t) t.classList.remove('visible');
+} {
   document.getElementById('tree-tooltip').classList.remove('visible');
 }
 
