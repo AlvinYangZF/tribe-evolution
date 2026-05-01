@@ -1170,16 +1170,49 @@ async function loadInitialData() {
 }
 
 // ── WebSocket Connection ──
+let pollTimer = null;
+
+function startPolling() {
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(async () => {
+    try {
+      const [agents, stats] = await Promise.all([
+        fetch('/api/agents').then(r => r.json()),
+        fetch('/api/stats').then(r => r.json()),
+      ]);
+      updateDashboard({ agents, stats });
+      loadTree();
+    } catch (err) {
+      // poll failed, will retry
+    }
+  }, 5000);
+}
+
+function stopPolling() {
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+}
+
 function connectWS() {
   statusConnecting();
+  startPolling(); // Start REST polling as backup
 
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const wsUrl = `${protocol}//${location.host}/ws`;
-  const ws = new WebSocket(wsUrl);
+  let ws;
+  try {
+    ws = new WebSocket(wsUrl);
+  } catch(e) {
+    // WebSocket failed entirely, polling will handle it
+    statusDisconnected();
+    return;
+  }
 
   ws.onopen = () => {
     statusConnected();
+    stopPolling(); // WS works, no need for polling
     document.getElementById('footer-ws').textContent = 'WS: ✅ Connected';
+    // Do an immediate full refresh on reconnect
+    loadInitialData();
   };
 
   ws.onmessage = (e) => {
@@ -1197,9 +1230,10 @@ function connectWS() {
 
   ws.onclose = () => {
     statusDisconnected();
-    document.getElementById('footer-ws').textContent = 'WS: ❌ Disconnected';
-    // Auto reconnect after 5 seconds
-    setTimeout(connectWS, 5000);
+    document.getElementById('footer-ws').textContent = 'WS: ❌ Disconnected (REST fallback)';
+    startPolling(); // Fall back to REST polling
+    // Auto reconnect after 10 seconds
+    setTimeout(connectWS, 10000);
   };
 
   ws.onerror = () => {
