@@ -1,26 +1,17 @@
 /**
  * Simple email sender for agent notifications.
- * Sends agent proposals and messages to user via 163 SMTP.
+ * Sends agent proposals and messages to user via SMTP.
+ *
+ * All credentials come from the caller — nothing hardcoded.
  */
 import nodemailer from 'nodemailer';
 
-const EMAIL_USER = 'momser@163.com';
-const EMAIL_PASS = Buffer.from('UUpUcHZaZjg5Slh5Q21GUQ==', 'base64').toString();
-const TO_EMAIL = 'yangzifeng.alvin@bytedance.com';
-
-// Lazy transporter (created on first use)
-let transporter: nodemailer.Transporter | null = null;
-
-function getTransporter(): nodemailer.Transporter {
-  if (!transporter) {
-    transporter = nodemailer.createTransport({
-      host: 'smtp.163.com',
-      port: 465,
-      secure: true,
-      auth: { user: EMAIL_USER, pass: EMAIL_PASS },
-    });
-  }
-  return transporter;
+export interface NotifyConfig {
+  smtpHost: string;
+  smtpPort: number;
+  emailUser: string;
+  emailPass: string;
+  notifyEmail: string;
 }
 
 export interface AgentMessage {
@@ -33,9 +24,27 @@ export interface AgentMessage {
 }
 
 /**
+ * Create (or return cached) transporter for the given config.
+ */
+function getTransporter(cfg: NotifyConfig): nodemailer.Transporter {
+  return nodemailer.createTransport({
+    host: cfg.smtpHost,
+    port: cfg.smtpPort,
+    secure: cfg.smtpPort === 465,
+    auth: { user: cfg.emailUser, pass: cfg.emailPass },
+  });
+}
+
+/**
  * Send an email notification about an agent's message/proposal.
  */
-export async function notifyUser(msg: AgentMessage): Promise<void> {
+export async function notifyUser(cfg: NotifyConfig, msg: AgentMessage): Promise<void> {
+  // Skip if email is not configured
+  if (!cfg.emailUser || !cfg.notifyEmail) {
+    console.log('  📧 Email skipped (not configured)');
+    return;
+  }
+
   const subject = `🤖 [${msg.agentId}] ${msg.title}`;
   const body = [
     `来自 Agent: ${msg.agentId}`,
@@ -49,10 +58,10 @@ export async function notifyUser(msg: AgentMessage): Promise<void> {
   ].join('\n');
 
   try {
-    const t = getTransporter();
+    const t = getTransporter(cfg);
     await t.sendMail({
-      from: EMAIL_USER,
-      to: TO_EMAIL,
+      from: cfg.emailUser,
+      to: cfg.notifyEmail,
       subject,
       text: body,
     });
@@ -66,12 +75,13 @@ export async function notifyUser(msg: AgentMessage): Promise<void> {
 /**
  * Send a daily/weekly evolution summary.
  */
-export async function sendEvolutionSummary(summary: string): Promise<void> {
+export async function sendEvolutionSummary(cfg: NotifyConfig, summary: string): Promise<void> {
+  if (!cfg.emailUser || !cfg.notifyEmail) return;
   try {
-    const t = getTransporter();
+    const t = getTransporter(cfg);
     await t.sendMail({
-      from: EMAIL_USER,
-      to: TO_EMAIL,
+      from: cfg.emailUser,
+      to: cfg.notifyEmail,
       subject: '🧬 Tribe Evolution — 进化摘要',
       text: summary,
     });

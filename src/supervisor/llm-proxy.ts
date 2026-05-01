@@ -1,14 +1,12 @@
 import type { LLMRequest, LLMResponse } from '../shared/types.js';
 
 const DEEPSEEK_API_URL = 'https://api.deepseek.com/chat/completions';
-const DEFAULT_TOKEN_PER_AGENT = 1_000_000;
-
-/** In-memory token balances keyed by agentId */
-const tokenBalances = new Map<string, number>();
+const LLM_TIMEOUT_MS = 30_000;
 
 /**
  * Proxy a call to the DeepSeek API.
- * Automatically deducts tokens from the agent's balance based on response usage.
+ * Returns only usage/cost data; token deduction is handled by the Supervisor
+ * based on the agent's actual tokenBalance field.
  */
 export async function proxyCall(request: LLMRequest): Promise<LLMResponse> {
   const apiKey = process.env.DEEPSEEK_API_KEY;
@@ -16,18 +14,27 @@ export async function proxyCall(request: LLMRequest): Promise<LLMResponse> {
     throw new Error('DEEPSEEK_API_KEY not configured');
   }
 
-  const response = await fetch(DEEPSEEK_API_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: request.model,
-      messages: request.messages,
-      max_tokens: request.maxTokens,
-    }),
-  });
+  let response: Response;
+  try {
+    response = await fetch(DEEPSEEK_API_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: request.model,
+        messages: request.messages,
+        max_tokens: request.maxTokens,
+      }),
+      signal: AbortSignal.timeout(LLM_TIMEOUT_MS),
+    });
+  } catch (err: unknown) {
+    if (err instanceof DOMException && err.name === 'TimeoutError') {
+      throw new Error(`LLM call timed out after ${LLM_TIMEOUT_MS / 1000}s`);
+    }
+    throw err;
+  }
 
   if (!response.ok) {
     throw new Error(`DeepSeek API returned ${response.status}: ${response.statusText}`);
@@ -45,8 +52,8 @@ export async function proxyCall(request: LLMRequest): Promise<LLMResponse> {
     total: data.usage.total_tokens,
   };
 
-  // Deduct tokens from agent balance
-  deductTokens(request.agentId, tokenUsage.total);
+  // Token deduction is handled by the Supervisor (agent.tokenBalance)
+  // so that the on-disk agent state stays in sync.
 
   return {
     requestId: request.requestId,
@@ -54,25 +61,4 @@ export async function proxyCall(request: LLMRequest): Promise<LLMResponse> {
     tokenUsage,
     cost: tokenUsage.total * 0.000001, // rough cost estimate
   };
-}
-
-/**
- * Deduct tokens from an agent's balance.
- * Returns true if successful, false if insufficient tokens.
- */
-export function deductTokens(agentId: string, amount: number): boolean {
-  const current = tokenBalances.get(agentId) ?? DEFAULT_TOKEN_PER_AGENT;
-  if (current < amount) {
-    return false;
-  }
-  tokenBalances.set(agentId, current - amount);
-  return true;
-}
-
-/**
- * Get the current token balance for an agent.
- * New/unseen agents default to DEFAULT_TOKEN_PER_AGENT.
- */
-export function getTokenBalance(agentId: string): number {
-  return tokenBalances.get(agentId) ?? DEFAULT_TOKEN_PER_AGENT;
 }

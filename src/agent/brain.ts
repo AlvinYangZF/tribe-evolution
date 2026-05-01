@@ -189,11 +189,23 @@ export function parseDecision(llmResponse: string): AgentDecision {
     return { ...IDLE_DECISION };
   }
 
+  // Validate params: must be a non-null, non-array object
+  if (typeof params !== 'object' || params === null || Array.isArray(params)) {
+    return { ...IDLE_DECISION, reasoning: 'LLM response had invalid params (not an object)' };
+  }
+
+  // For 'propose' action, require at least title or description
+  if (action === 'propose') {
+    const hasTitle = typeof (params as Record<string, unknown>).title === 'string' && ((params as Record<string, unknown>).title as string).trim().length > 0;
+    const hasDescription = typeof (params as Record<string, unknown>).description === 'string' && ((params as Record<string, unknown>).description as string).trim().length > 0;
+    if (!hasTitle && !hasDescription) {
+      return { ...IDLE_DECISION, reasoning: 'LLM propose action missing title or description' };
+    }
+  }
+
   return {
     action: action as DecisionAction,
-    params: (typeof params === 'object' && params !== null && !Array.isArray(params))
-      ? (params as Record<string, unknown>)
-      : {},
+    params: params as Record<string, unknown>,
     reasoning: typeof reasoning === 'string' ? reasoning : '',
   };
 }

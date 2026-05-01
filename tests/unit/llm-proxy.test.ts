@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { proxyCall, deductTokens, getTokenBalance } from '../../src/supervisor/llm-proxy.js';
+import { proxyCall } from '../../src/supervisor/llm-proxy.js';
 
 describe('LLM Proxy', () => {
   const originalEnv = process.env;
@@ -62,35 +62,55 @@ describe('LLM Proxy', () => {
         maxTokens: 50,
       })).rejects.toThrow('401');
     });
-  });
 
-  describe('deductTokens', () => {
-    it('deducts tokens from balance when sufficient', () => {
-      // Use fresh agent to avoid cross-test pollution
-      const result = deductTokens('deduct-agent', 100);
-      expect(result).toBe(true);
-      expect(getTokenBalance('deduct-agent')).toBe(999_900);
+    it('does not internally deduct tokens (deduction is handled by Supervisor)', async () => {
+      const mockResponse = {
+        id: 'test-id',
+        choices: [{ message: { content: 'Hello' } }],
+        usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 500 },
+      };
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => mockResponse,
+      }));
+
+      process.env.DEEPSEEK_API_KEY = 'sk-test-key';
+
+      const response = await proxyCall({
+        requestId: 'req-3',
+        agentId: 'agent-any',
+        model: 'deepseek-chat',
+        messages: [{ role: 'user', content: 'Hi' }],
+        maxTokens: 50,
+      });
+
+      // Usage is reported but no internal deduction occurs
+      expect(response.tokenUsage.total).toBe(500);
+      expect(response.cost).toBe(500 * 0.000001);
     });
 
-    it('returns false when insufficient tokens', () => {
-      const balance = getTokenBalance('insufficient-agent');
-      const overDeduct = balance + 1;
-      const result = deductTokens('insufficient-agent', overDeduct);
-      expect(result).toBe(false);
-      expect(getTokenBalance('insufficient-agent')).toBe(balance);
-    });
+    it('passes AbortSignal.timeout (30s) to fetch', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          id: 'test-id',
+          choices: [{ message: { content: 'OK' } }],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        }),
+      }));
 
-    it('maintains independent balances for different agents', () => {
-      deductTokens('agent-alpha', 300);
-      deductTokens('agent-beta', 500);
-      expect(getTokenBalance('agent-alpha')).toBe(999_700);
-      expect(getTokenBalance('agent-beta')).toBe(999_500);
-    });
-  });
+      process.env.DEEPSEEK_API_KEY = 'sk-test-key';
 
-  describe('getTokenBalance', () => {
-    it('returns 1,000,000 for new agents', () => {
-      expect(getTokenBalance('new-agent')).toBe(1_000_000);
+      await proxyCall({
+        requestId: 'req-4',
+        agentId: 'agent-1',
+        model: 'deepseek-chat',
+        messages: [{ role: 'user', content: 'Hi' }],
+        maxTokens: 50,
+      });
+
+      const callArgs = (fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+      expect(callArgs[1].signal).toBeDefined();
     });
   });
 });

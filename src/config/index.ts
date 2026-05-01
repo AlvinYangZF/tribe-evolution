@@ -13,6 +13,29 @@ export interface Config {
   mutationBaseRate: number;
   newAgentProtectionRounds: number;
   dashboardPort: number;
+  // Email / SMTP (for sending notifications)
+  smtpHost: string;
+  smtpPort: number;
+  emailUser: string;
+  emailPass: string;
+  notifyEmail: string;
+  // POP3 (for checking email replies)
+  pop3Host: string;
+  pop3Port: number;
+}
+
+/** Decode a value if it looks like base64, otherwise return as-is. */
+function maybeDecodeBase64(val: string): string {
+  if (!val) return val;
+  // Heuristic: base64 is alphanumeric + '+' + '/' + '=' padding, no spaces
+  if (/^[A-Za-z0-9+/]+=*$/.test(val) && val.length >= 4) {
+    try {
+      return Buffer.from(val, 'base64').toString('utf-8');
+    } catch {
+      return val;
+    }
+  }
+  return val;
 }
 
 export function loadConfig(): Config {
@@ -27,5 +50,12 @@ export function loadConfig(): Config {
     mutationBaseRate: parseFloat(process.env.MUTATION_RATE || '0.1'),
     newAgentProtectionRounds: parseInt(process.env.NEW_AGENT_PROTECTION || '3', 10),
     dashboardPort: parseInt(process.env.DASHBOARD_PORT || '3000', 10),
+    smtpHost: process.env.SMTP_HOST || 'smtp.163.com',
+    smtpPort: parseInt(process.env.SMTP_PORT || '465', 10),
+    emailUser: process.env.EMAIL_USER || '',
+    emailPass: maybeDecodeBase64(process.env.EMAIL_PASS || ''),
+    notifyEmail: process.env.NOTIFY_EMAIL || '',
+    pop3Host: process.env.POP3_HOST || 'pop.163.com',
+    pop3Port: parseInt(process.env.POP3_PORT || '995', 10),
   };
 }

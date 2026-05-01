@@ -1,4 +1,5 @@
 const BRAVE_SEARCH_URL = 'https://api.search.brave.com/res/v1/web/search';
+const SEARCH_TIMEOUT_MS = 15_000;
 
 export interface SearchResult {
   title?: string;
@@ -20,13 +21,23 @@ export async function searchWeb(query: string): Promise<string[]> {
     const url = new URL(BRAVE_SEARCH_URL);
     url.searchParams.set('q', query);
 
-    const response = await fetch(url.toString(), {
-      headers: {
-        Accept: 'application/json',
-        'Accept-Encoding': 'gzip',
-        'X-Subscription-Token': apiKey,
-      },
-    });
+    let response: Response;
+    try {
+      response = await fetch(url.toString(), {
+        headers: {
+          Accept: 'application/json',
+          'Accept-Encoding': 'gzip',
+          'X-Subscription-Token': apiKey,
+        },
+        signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS),
+      });
+    } catch (err: unknown) {
+      if (err instanceof DOMException && err.name === 'TimeoutError') {
+        console.error(`Brave Search timed out after ${SEARCH_TIMEOUT_MS / 1000}s`);
+        return [];
+      }
+      throw err;
+    }
 
     if (!response.ok) {
       console.error(`Brave Search API error: ${response.status} ${response.statusText}`);

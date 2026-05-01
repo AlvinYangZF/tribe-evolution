@@ -77,37 +77,57 @@ async function seed(config: ReturnType<typeof loadConfig>) {
 
   console.log(`  👤 5 male, 5 female agents`);
 
-  // Init event log
+  // Init event log (only if not already present)
   const eventLogDir = path.join(config.ecosystemDir, 'event-log');
   await ensureDir(eventLogDir);
-  await fs.writeFile(path.join(eventLogDir, 'events.jsonl'), '', 'utf-8');
+  const eventsPath = path.join(eventLogDir, 'events.jsonl');
+  try {
+    await fs.access(eventsPath);
+  } catch {
+    await fs.writeFile(eventsPath, '', 'utf-8');
+  }
 
-  // Init reputation log
+  // Init reputation log (only if not already present)
   const repDir = path.join(config.ecosystemDir, 'reputation');
   await ensureDir(repDir);
-  await fs.writeFile(path.join(repDir, 'log.jsonl'), '', 'utf-8');
+  const repLogPath = path.join(repDir, 'log.jsonl');
+  try {
+    await fs.access(repLogPath);
+  } catch {
+    await fs.writeFile(repLogPath, '', 'utf-8');
+  }
 
-  // Init config
-  await safeWriteJSON(path.join(config.ecosystemDir, 'config.json'), {
-    cycleIntervalMs: config.cycleIntervalMs,
-    eliminationRate: config.eliminationRate,
-    mutationBaseRate: config.mutationBaseRate,
-    maxAgents: config.maxAgents,
-    defaultTokenPerCycle: config.defaultTokenPerCycle,
-    newAgentProtectionRounds: config.newAgentProtectionRounds,
-  });
+  // Init config (only if not already present)
+  const configPath = path.join(config.ecosystemDir, 'config.json');
+  try {
+    await fs.access(configPath);
+  } catch {
+    await safeWriteJSON(configPath, {
+      cycleIntervalMs: config.cycleIntervalMs,
+      eliminationRate: config.eliminationRate,
+      mutationBaseRate: config.mutationBaseRate,
+      maxAgents: config.maxAgents,
+      defaultTokenPerCycle: config.defaultTokenPerCycle,
+      newAgentProtectionRounds: config.newAgentProtectionRounds,
+    });
+  }
 
-  // Init resources
+  // Init resources (only if not already present)
   const resourcesDir = path.join(config.ecosystemDir, 'resources');
   await ensureDir(resourcesDir);
-  const defaultResources = [
-    { id: 'res_001', type: 'file_lock', name: 'Data Lake Alpha', ownerId: null, lockedAt: null, lockExpiresAt: null, leasePrice: 1000 },
-    { id: 'res_002', type: 'file_lock', name: 'Compute Slot Beta', ownerId: null, lockedAt: null, lockExpiresAt: null, leasePrice: 2000 },
-    { id: 'res_003', type: 'skill_package', name: 'Advanced Search', ownerId: null, lockedAt: null, lockExpiresAt: null, leasePrice: 5000 },
-    { id: 'res_004', type: 'data_set', name: 'Market Data Feed', ownerId: null, lockedAt: null, lockExpiresAt: null, leasePrice: 3000 },
-    { id: 'res_005', type: 'tool_access', name: 'Code Analysis Tool', ownerId: null, lockedAt: null, lockExpiresAt: null, leasePrice: 1500 },
-  ];
-  await safeWriteJSON(path.join(resourcesDir, 'resources.json'), defaultResources);
+  const resourcesPath = path.join(resourcesDir, 'resources.json');
+  try {
+    await fs.access(resourcesPath);
+  } catch {
+    const defaultResources = [
+      { id: 'res_001', type: 'file_lock', name: 'Data Lake Alpha', ownerId: null, lockedAt: null, lockExpiresAt: null, leasePrice: 1000 },
+      { id: 'res_002', type: 'file_lock', name: 'Compute Slot Beta', ownerId: null, lockedAt: null, lockExpiresAt: null, leasePrice: 2000 },
+      { id: 'res_003', type: 'skill_package', name: 'Advanced Search', ownerId: null, lockedAt: null, lockExpiresAt: null, leasePrice: 5000 },
+      { id: 'res_004', type: 'data_set', name: 'Market Data Feed', ownerId: null, lockedAt: null, lockExpiresAt: null, leasePrice: 3000 },
+      { id: 'res_005', type: 'tool_access', name: 'Code Analysis Tool', ownerId: null, lockedAt: null, lockExpiresAt: null, leasePrice: 1500 },
+    ];
+    await safeWriteJSON(resourcesPath, defaultResources);
+  }
 
   console.log(`\n✅ Population seeded (10 agents)`);
   console.log(`📁 Ecosystem dir: ${config.ecosystemDir}`);
