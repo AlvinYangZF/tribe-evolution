@@ -134,7 +134,7 @@ export class Supervisor extends EventEmitter {
 
     // 4. Run evolution cycle
     const agentArray = [...this.agents.values()];
-    const evolved = await runLifeCycle(agentArray, cycleNum);
+    const evolved = await runLifeCycle(agentArray, cycleNum, this.config.maxAgents);
 
     // 5. Save updated agents
     this.agents.clear();

@@ -211,7 +211,7 @@ function crossoverGenomes(a: AgentState['genome'], b: AgentState['genome']): Age
  * @param cycleNumber - Current cycle number (1-indexed)
  * @returns Next generation agent pool
  */
-export function runCycle(agents: AgentState[], cycleNumber: number): AgentState[] {
+export function runCycle(agents: AgentState[], cycleNumber: number, maxAgents: number = 20): AgentState[] {
   // Step 1: Evaluate
   const ranked = evaluateFitness(agents);
 
@@ -221,8 +221,22 @@ export function runCycle(agents: AgentState[], cycleNumber: number): AgentState[
   }
 
   // Step 2: Eliminate
-  const { survivors, eliminated } = eliminate(ranked, 0.3);
-  const eliminatedCount = eliminated.length;
+  let { survivors, eliminated } = eliminate(ranked, 0.3);
+
+  // Enforce max population cap — eliminate lowest fitness beyond max
+  const sortedSurvivors = [...survivors].sort((a, b) => {
+    const fa = ranked.find(r => r.agent.id === a.id)?.fitness ?? 0;
+    const fb = ranked.find(r => r.agent.id === b.id)?.fitness ?? 0;
+    return fb - fa;
+  });
+  while (sortedSurvivors.length > maxAgents) {
+    const removed = sortedSurvivors.pop()!;
+    removed.alive = false;
+    eliminated.push(removed);
+  }
+  survivors = sortedSurvivors;
+
+  const eliminatedCount = Math.min(eliminated.length, maxAgents - survivors.length + eliminated.length);
 
   // Step 3: Reproduce
   const offspring = reproduce(ranked, eliminatedCount);
