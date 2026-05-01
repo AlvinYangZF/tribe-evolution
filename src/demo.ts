@@ -9,17 +9,30 @@
 
 import { loadConfig } from './config/index.js';
 import { ensureDir, safeWriteJSON, safeReadJSON } from './shared/filesystem.js';
-import { createRandomGenome, genomeToSystemPrompt } from './agent/genome.js';
+import { createRandomGenome, createRandomDiploidGenome, expressGenome, expressedToGenome, genomeToSystemPrompt } from './agent/genome.js';
 import { runCycle } from './supervisor/life-cycle.js';
 import { calculateContributionScores, allocateTokens } from './supervisor/token-economy.js';
 import type { AgentState, Genome } from './shared/types.js';
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
 
-function createAgent(id: string, genome: Genome, generation: number, parentId: string | null): AgentState {
+function createAgent(id: string, genome: Genome, generation: number, parentId: string | null, gender: 'male' | 'female' = 'male'): AgentState {
+  // Create a diploid genome that expresses to match the provided genome
+  const diploidGenome = createRandomDiploidGenome(gender);
+  // Override dominant alleles to match the genome
+  diploidGenome.personaName = { dominant: genome.personaName, recessive: diploidGenome.personaName.recessive };
+  diploidGenome.traits = genome.traits.map(t => ({ dominant: t, recessive: t }));
+  diploidGenome.collabBias = { dominant: genome.collabBias, recessive: genome.collabBias };
+  diploidGenome.riskTolerance = { dominant: genome.riskTolerance, recessive: genome.riskTolerance };
+  diploidGenome.communicationFreq = { dominant: genome.communicationFreq, recessive: genome.communicationFreq };
+  for (const skill of Object.keys(genome.skills) as Array<keyof typeof genome.skills>) {
+    diploidGenome.skills[skill] = { dominant: genome.skills[skill], recessive: genome.skills[skill] };
+  }
+
   return {
     id,
     genome,
+    diploidGenome,
     generation,
     parentId,
     tokenBalance: 1_000_000,

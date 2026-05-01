@@ -59,19 +59,19 @@ describe('compileAgentPrompt', () => {
   it('should include collabBias', () => {
     const genome = makeGenome({ collabBias: 0.7 });
     const prompt = compileAgentPrompt(genome, makeState(), makeEnv());
-    expect(prompt).toContain('0.7');
+    expect(prompt).toContain('70/100');
   });
 
   it('should include riskTolerance', () => {
     const genome = makeGenome({ riskTolerance: 0.3 });
     const prompt = compileAgentPrompt(genome, makeState(), makeEnv());
-    expect(prompt).toContain('0.3');
+    expect(prompt).toContain('30/100');
   });
 
   it('should include communicationFreq', () => {
     const genome = makeGenome({ communicationFreq: 0.6 });
     const prompt = compileAgentPrompt(genome, makeState(), makeEnv());
-    expect(prompt).toContain('0.6');
+    expect(prompt).toContain('60/100');
   });
 
   it('should include state fields (balance, age, reputation, generation)', () => {
@@ -125,6 +125,25 @@ describe('compileAgentPrompt', () => {
     expect(prompt).toContain('"action"');
     expect(prompt).toContain('"params"');
     expect(prompt).toContain('"reasoning"');
+  });
+
+  it('should include core mission (SURVIVE + REPRODUCE)', () => {
+    const prompt = compileAgentPrompt(makeGenome(), makeState(), makeEnv());
+    expect(prompt).toContain('SURVIVE as long as possible');
+    expect(prompt).toContain('age >= 50 = death');
+    expect(prompt).toContain('Find a mate and REPRODUCE');
+  });
+
+  it('should include gender info when state has gender', () => {
+    const prompt = compileAgentPrompt(makeGenome(), makeState({ gender: 'male' }), makeEnv());
+    expect(prompt).toContain('You are a male agent');
+    expect(prompt).toContain('Sexual reproduction requires a partner of the opposite gender');
+  });
+
+  it('should not include gender info when state has no gender', () => {
+    const prompt = compileAgentPrompt(makeGenome(), makeState({ gender: undefined }), makeEnv());
+    expect(prompt).not.toContain('You are a');
+    expect(prompt).not.toContain('Sexual reproduction');
   });
 });
 

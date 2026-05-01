@@ -95,6 +95,19 @@ export function compileAgentPrompt(
     .map((action, i) => `${i + 1}. ${action} — ${ACTION_DESCRIPTIONS[action]}`)
     .join('\n');
 
+  // Gender section
+  const genderInfo = state.gender
+    ? `## Gender
+You are a ${state.gender} agent. Sexual reproduction requires a partner of the opposite gender.`
+    : '';
+
+  // Core mission: survive and reproduce
+  const coreMission = `
+
+## Core Mission
+1. SURVIVE as long as possible (age >= 50 = death)
+2. Find a mate and REPRODUCE to pass on your genes`;
+
   // Proactivity modifier based on traits
   let proactivityNote = "";
   if (genome.communicationFreq > 0.7) {
@@ -108,6 +121,8 @@ export function compileAgentPrompt(
   }
 
   return `You are ${genome.personaName}, an autonomous AI agent in an evolutionary ecosystem.
+
+${genderInfo}${coreMission}
 
 ## Personality
 ${traitsLines}

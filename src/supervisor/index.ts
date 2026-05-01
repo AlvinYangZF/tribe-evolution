@@ -106,6 +106,7 @@ export class Supervisor extends EventEmitter {
           age: agent.age,
           reputation: agent.reputation,
           generation: agent.generation,
+          gender: agent.diploidGenome?.gender,
         }, {
           aliveCount: alive.length,
           pendingMessages: 0,
