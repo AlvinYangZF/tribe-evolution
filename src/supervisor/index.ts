@@ -5,6 +5,7 @@ import { EventLog } from './event-log.js';
 import { Scheduler } from './scheduler.js';
 import { ProposalManager } from './proposal.js';
 import { runCycle as runLifeCycle } from './life-cycle.js';
+import { notifyUser } from './notify.js';
 import type { Config } from '../config/index.js';
 import { ensureDir, safeWriteJSON, safeReadJSON } from '../shared/filesystem.js';
 import type { AgentState, Genome } from '../shared/types.js';
@@ -200,6 +201,15 @@ export class Supervisor extends EventEmitter {
             agentId: p.agentId,
             data: { proposalId: p.id, title: p.title },
           });
+          // Email user immediately
+          notifyUser({
+            agentId: p.agentId,
+            type: p.type,
+            title: p.title,
+            description: p.description,
+            tokenCost: p.tokenCost,
+            proposalId: p.id,
+          }).catch(() => {});
         }
       }
       this.lastProposalCount = pending.length;
