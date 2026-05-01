@@ -1,0 +1,278 @@
+import { describe, it, expect } from 'vitest';
+import { compileAgentPrompt, parseDecision } from '../../src/agent/brain.js';
+import type { Genome } from '../../src/shared/types.js';
+import type { AgentDecision, AgentStateForBrain, AgentEnvironmentForBrain } from '../../src/agent/brain.js';
+
+function makeGenome(overrides: Partial<Genome> = {}): Genome {
+  return {
+    personaName: 'TestBot',
+    traits: ['curious', 'helpful'],
+    skills: {
+      web_search: 0.9,
+      code_write: 0.3,
+      data_analyze: 0.5,
+      artifact_write: 0.8,
+      observe: 0.4,
+      propose: 0.6,
+    },
+    collabBias: 0.7,
+    riskTolerance: 0.3,
+    communicationFreq: 0.6,
+    ...overrides,
+  };
+}
+
+function makeState(overrides: Partial<AgentStateForBrain> = {}): AgentStateForBrain {
+  return {
+    balance: 1000,
+    age: 50,
+    reputation: 0.85,
+    generation: 3,
+    ...overrides,
+  };
+}
+
+function makeEnv(overrides: Partial<AgentEnvironmentForBrain> = {}): AgentEnvironmentForBrain {
+  return {
+    aliveCount: 20,
+    availableResources: 5,
+    pendingMessages: 2,
+    ...overrides,
+  };
+}
+
+describe('compileAgentPrompt', () => {
+  it('should include persona name in output', () => {
+    const genome = makeGenome({ personaName: 'Omega' });
+    const prompt = compileAgentPrompt(genome, makeState(), makeEnv());
+    expect(prompt).toContain('Omega');
+  });
+
+  it('should include all traits', () => {
+    const genome = makeGenome({ traits: ['curious', 'helpful', 'explorer'] });
+    const prompt = compileAgentPrompt(genome, makeState(), makeEnv());
+    expect(prompt).toContain('curious');
+    expect(prompt).toContain('helpful');
+    expect(prompt).toContain('explorer');
+  });
+
+  it('should include collabBias', () => {
+    const genome = makeGenome({ collabBias: 0.7 });
+    const prompt = compileAgentPrompt(genome, makeState(), makeEnv());
+    expect(prompt).toContain('0.7');
+  });
+
+  it('should include riskTolerance', () => {
+    const genome = makeGenome({ riskTolerance: 0.3 });
+    const prompt = compileAgentPrompt(genome, makeState(), makeEnv());
+    expect(prompt).toContain('0.3');
+  });
+
+  it('should include communicationFreq', () => {
+    const genome = makeGenome({ communicationFreq: 0.6 });
+    const prompt = compileAgentPrompt(genome, makeState(), makeEnv());
+    expect(prompt).toContain('0.6');
+  });
+
+  it('should include state fields (balance, age, reputation, generation)', () => {
+    const prompt = compileAgentPrompt(makeGenome(), makeState({ balance: 500, age: 10, reputation: 0.9, generation: 5 }), makeEnv());
+    expect(prompt).toContain('500');
+    expect(prompt).toContain('10');
+    expect(prompt).toContain('0.9');
+    expect(prompt).toContain('5');
+  });
+
+  it('should include environment fields (aliveCount, availableResources, pendingMessages)', () => {
+    const prompt = compileAgentPrompt(makeGenome(), makeState(), makeEnv({ aliveCount: 15, availableResources: 3, pendingMessages: 1 }));
+    expect(prompt).toContain('15');
+    expect(prompt).toContain('3');
+    expect(prompt).toContain('1');
+  });
+
+  it('should include skills with priority > 0', () => {
+    const prompt = compileAgentPrompt(makeGenome(), makeState(), makeEnv());
+    // Only web_search (0.9), artifact_write (0.8), propose (0.6) have skills > 0.5
+    // Actually all skills have values > 0, so all should appear
+    expect(prompt).toContain('web_search');
+    expect(prompt).toContain('artifact_write');
+    expect(prompt).toContain('propose');
+  });
+
+  it('should not include skills with priority 0', () => {
+    const genome = makeGenome({
+      skills: { web_search: 0.9, code_write: 0, data_analyze: 0, artifact_write: 0.8, observe: 0, propose: 0 },
+    });
+    const prompt = compileAgentPrompt(genome, makeState(), makeEnv());
+    expect(prompt).toContain('web_search');
+    expect(prompt).toContain('artifact_write');
+    expect(prompt).not.toContain('code_write');
+    expect(prompt).not.toContain('data_analyze');
+  });
+
+  it('should mention all available action types', () => {
+    const prompt = compileAgentPrompt(makeGenome(), makeState(), makeEnv());
+    expect(prompt).toContain('web_search');
+    expect(prompt).toContain('write_artifact');
+    expect(prompt).toContain('observe');
+    expect(prompt).toContain('propose');
+    expect(prompt).toContain('lock_resource');
+    expect(prompt).toContain('trade');
+    expect(prompt).toContain('idle');
+  });
+
+  it('should include JSON output format instruction', () => {
+    const prompt = compileAgentPrompt(makeGenome(), makeState(), makeEnv());
+    expect(prompt).toContain('"action"');
+    expect(prompt).toContain('"params"');
+    expect(prompt).toContain('"reasoning"');
+  });
+});
+
+describe('parseDecision', () => {
+  it('should parse a valid JSON decision', () => {
+    const response = JSON.stringify({
+      action: 'web_search',
+      params: { query: 'AI news' },
+      reasoning: 'I need to learn about AI',
+    });
+    const result = parseDecision(response);
+    expect(result.action).toBe('web_search');
+    expect(result.params).toEqual({ query: 'AI news' });
+    expect(result.reasoning).toBe('I need to learn about AI');
+  });
+
+  it('should parse idle decision correctly', () => {
+    const response = JSON.stringify({
+      action: 'idle',
+      params: {},
+      reasoning: 'No need to act now',
+    });
+    const result = parseDecision(response);
+    expect(result.action).toBe('idle');
+    expect(result.params).toEqual({});
+  });
+
+  it('should parse decision with empty params', () => {
+    const response = JSON.stringify({
+      action: 'observe',
+      params: {},
+      reasoning: 'Let me observe others',
+    });
+    const result = parseDecision(response);
+    expect(result.action).toBe('observe');
+    expect(result.params).toEqual({});
+  });
+
+  it('should fallback to idle when response is not valid JSON', () => {
+    const result = parseDecision('not json at all');
+    expect(result.action).toBe('idle');
+    expect(result.params).toEqual({});
+    expect(result.reasoning).toBe('LLM returned invalid response');
+  });
+
+  it('should fallback to idle when response is empty string', () => {
+    const result = parseDecision('');
+    expect(result.action).toBe('idle');
+    expect(result.params).toEqual({});
+  });
+
+  it('should fallback to idle when response is null', () => {
+    const result = parseDecision(null as unknown as string);
+    expect(result.action).toBe('idle');
+  });
+
+  it('should fallback to idle when JSON is missing action field', () => {
+    const response = JSON.stringify({ params: {}, reasoning: 'no action' });
+    const result = parseDecision(response);
+    expect(result.action).toBe('idle');
+  });
+
+  it('should fallback to idle when action is not a valid action type', () => {
+    const response = JSON.stringify({
+      action: 'fly_to_moon',
+      params: {},
+      reasoning: 'testing',
+    });
+    const result = parseDecision(response);
+    expect(result.action).toBe('idle');
+  });
+
+  it('should handle JSON with extra whitespace or newlines', () => {
+    const response = `{
+      "action": "lock_resource",
+      "params": { "resourceId": "res-1" },
+      "reasoning": "Need this resource"
+    }`;
+    const result = parseDecision(response);
+    expect(result.action).toBe('lock_resource');
+    expect(result.params).toEqual({ resourceId: 'res-1' });
+  });
+});
+
+describe('decide (integration-style with mock LLM)', () => {
+  // Import decide dynamically — it depends on compileAgentPrompt + parseDecision
+  // which are already tested. We test the orchestration with a mock callLLM.
+
+  it('should return a valid AgentDecision from mock LLM', async () => {
+    const { decide } = await import('../../src/agent/brain.js');
+
+    const mockLLM = async (_sys: string, _user: string): Promise<string> => {
+      return JSON.stringify({
+        action: 'web_search',
+        params: { query: 'latest AI papers' },
+        reasoning: 'Staying informed',
+      });
+    };
+
+    const result = await decide(makeGenome(), makeState(), makeEnv(), mockLLM);
+    expect(result.action).toBe('web_search');
+    expect(result.params).toEqual({ query: 'latest AI papers' });
+    expect(result.reasoning).toBe('Staying informed');
+  });
+
+  it('should return idle when mock LLM returns invalid JSON', async () => {
+    const { decide } = await import('../../src/agent/brain.js');
+
+    const mockLLM = async (_sys: string, _user: string): Promise<string> => {
+      return 'this is not JSON';
+    };
+
+    const result = await decide(makeGenome(), makeState(), makeEnv(), mockLLM);
+    expect(result.action).toBe('idle');
+    expect(result.params).toEqual({});
+    expect(result.reasoning).toBe('LLM returned invalid response');
+  });
+
+  it('should return idle when mock LLM throws an error', async () => {
+    const { decide } = await import('../../src/agent/brain.js');
+
+    const mockLLM = async (_sys: string, _user: string): Promise<string> => {
+      throw new Error('API unavailable');
+    };
+
+    const result = await decide(makeGenome(), makeState(), makeEnv(), mockLLM);
+    expect(result.action).toBe('idle');
+    expect(result.params).toEqual({});
+    expect(result.reasoning).toContain('LLM call failed');
+  });
+
+  it('should pass system prompt and user message to callLLM', async () => {
+    const { decide } = await import('../../src/agent/brain.js');
+
+    let capturedSystem = '';
+    let capturedUser = '';
+
+    const mockLLM = async (system: string, user: string): Promise<string> => {
+      capturedSystem = system;
+      capturedUser = user;
+      return JSON.stringify({ action: 'idle', params: {}, reasoning: 'check' });
+    };
+
+    await decide(makeGenome({ personaName: 'Sigma' }), makeState({ balance: 999 }), makeEnv(), mockLLM);
+
+    expect(capturedSystem).toContain('Sigma');
+    expect(capturedSystem).toContain('999');
+    expect(capturedUser).toBeDefined();
+    expect(capturedUser.length).toBeGreaterThan(0);
+  });
+});

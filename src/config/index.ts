@@ -11,6 +11,7 @@ export interface Config {
   eliminationRate: number;
   mutationBaseRate: number;
   newAgentProtectionRounds: number;
+  dashboardPort: number;
 }
 
 export function loadConfig(): Config {
@@ -24,5 +25,6 @@ export function loadConfig(): Config {
     eliminationRate: parseFloat(process.env.ELIMINATION_RATE || '0.3'),
     mutationBaseRate: parseFloat(process.env.MUTATION_RATE || '0.1'),
     newAgentProtectionRounds: parseInt(process.env.NEW_AGENT_PROTECTION || '3', 10),
+    dashboardPort: parseInt(process.env.DASHBOARD_PORT || '3000', 10),
   };
 }

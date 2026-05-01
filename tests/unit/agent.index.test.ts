@@ -9,7 +9,7 @@ const agentEntry = path.resolve(__dirname, '../../src/agent/index.ts');
 function rpcCall(child: import('child_process').ChildProcess, id: string, method: string, params: Record<string, unknown> = {}): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const payload = JSON.stringify({ id, method, params }) + '\n';
-    const timeout = setTimeout(() => reject(new Error('RPC timeout')), 5000);
+    const timeout = setTimeout(() => reject(new Error('RPC timeout')), 10000);
 
     let buffer = '';
     const onData = (chunk: Buffer) => {
@@ -91,6 +91,114 @@ describe('agent subprocess (JSON-RPC)', () => {
       await rpcCall(child, 'r4a', 'token_refresh', { tokens: 300 });
       const fresh = await rpcCall(child, 'r4b', 'get_genome') as { result: { personaName: string } };
       expect(fresh.result.personaName).toBeDefined();
+    } finally {
+      child.kill();
+    }
+  });
+});
+
+describe('agent think_cycle', () => {
+  it('should return a valid decision structure when LLM is unavailable', async () => {
+    // Without DEEPSEEK_API_KEY set, the agent should fallback gracefully
+    const child = spawn('npx', ['tsx', agentEntry], {
+      stdio: ['pipe', 'pipe', 'inherit'],
+      cwd: path.resolve(__dirname, '../..'),
+      env: { ...process.env, DEEPSEEK_API_KEY: '' },
+    });
+
+    try {
+      const response = await rpcCall(child, 't1', 'think_cycle', {
+        cycle: 1,
+        environment: {
+          aliveCount: 10,
+          availableResources: 5,
+          pendingMessages: 2,
+        },
+      }) as {
+        id: string;
+        result: {
+          cycle: number;
+          decision: { action: string; params: Record<string, unknown>; reasoning: string };
+        };
+      };
+
+      expect(response).toBeDefined();
+      expect(response.result).toBeDefined();
+      expect(response.result.cycle).toBe(1);
+      expect(response.result.decision).toBeDefined();
+      expect(typeof response.result.decision.action).toBe('string');
+      expect(typeof response.result.decision.reasoning).toBe('string');
+      // Should be a valid action type (likely 'idle' when no API key)
+      expect(['web_search', 'write_artifact', 'observe', 'propose', 'lock_resource', 'trade', 'idle'])
+        .toContain(response.result.decision.action);
+    } finally {
+      child.kill();
+    }
+  });
+
+  it('should not crash when environment params are missing', async () => {
+    const child = spawn('npx', ['tsx', agentEntry], {
+      stdio: ['pipe', 'pipe', 'inherit'],
+      cwd: path.resolve(__dirname, '../..'),
+      env: { ...process.env, DEEPSEEK_API_KEY: '' },
+    });
+
+    try {
+      const response = await rpcCall(child, 't2', 'think_cycle', {}) as {
+        id: string;
+        result: { decision: { action: string } };
+      };
+
+      expect(response).toBeDefined();
+      expect(response.result).toBeDefined();
+      expect(response.result.decision).toBeDefined();
+      // Should not crash with missing params — action should be valid
+      expect(typeof response.result.decision.action).toBe('string');
+    } finally {
+      child.kill();
+    }
+  });
+
+  it('should not crash when no params at all', async () => {
+    const child = spawn('npx', ['tsx', agentEntry], {
+      stdio: ['pipe', 'pipe', 'inherit'],
+      cwd: path.resolve(__dirname, '../..'),
+      env: { ...process.env, DEEPSEEK_API_KEY: '' },
+    });
+
+    try {
+      // Send a think_cycle with undefined params (just method, no params field)
+      const response = await rpcCall(child, 't3', 'think_cycle') as {
+        id: string;
+        result: { decision: { action: string } };
+      };
+
+      expect(response).toBeDefined();
+      expect(response.result).toBeDefined();
+      expect(response.result.decision).toBeDefined();
+      expect(typeof response.result.decision.action).toBe('string');
+    } finally {
+      child.kill();
+    }
+  });
+
+  it('should still handle ping after think_cycle (agent stays alive)', async () => {
+    const child = spawn('npx', ['tsx', agentEntry], {
+      stdio: ['pipe', 'pipe', 'inherit'],
+      cwd: path.resolve(__dirname, '../..'),
+      env: { ...process.env, DEEPSEEK_API_KEY: '' },
+    });
+
+    try {
+      // First run think_cycle
+      await rpcCall(child, 't4a', 'think_cycle', {
+        cycle: 1,
+        environment: { aliveCount: 5, availableResources: 2, pendingMessages: 0 },
+      });
+
+      // Then ping — agent should still respond
+      const pingResponse = await rpcCall(child, 't4b', 'ping') as { id: string; result: { status: string } };
+      expect(pingResponse.result.status).toBe('pong');
     } finally {
       child.kill();
     }

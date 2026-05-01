@@ -44,6 +44,16 @@ export class Supervisor extends EventEmitter {
     await ensureDir(path.join(this.config.ecosystemDir, 'event-log'));
     await ensureDir(path.join(this.config.ecosystemDir, 'agents'));
 
+    // Start dashboard (with WebSocket server)
+    let dashboard: { broadcast: () => Promise<void> } | null = null;
+    try {
+      const { startDashboard } = await import('../dashboard/server.js');
+      dashboard = startDashboard(this.config.ecosystemDir, this.config.dashboardPort);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`Dashboard server not available (${msg}), continuing without UI`);
+    }
+
     // Log startup event
     await this.eventLog.append({
       type: 'agent_born',
@@ -53,6 +63,13 @@ export class Supervisor extends EventEmitter {
 
     // Start the scheduler
     this.scheduler.startCycle((cycleNum) => this.runCycle(cycleNum));
+
+    // Every cycle end, broadcast updates via WebSocket
+    if (dashboard) {
+      this.on('cycleEnd', async () => {
+        await dashboard.broadcast();
+      });
+    }
   }
 
   /**

@@ -19,6 +19,7 @@ function makeTestConfig(): Config {
     eliminationRate: 0.3,
     mutationBaseRate: 0.1,
     newAgentProtectionRounds: 3,
+    dashboardPort: 0,
   };
 }
 
