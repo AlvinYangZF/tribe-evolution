@@ -1030,7 +1030,7 @@ async function loadTree() {
     const defs = [];
 
     // Layout
-    function layout(nodes, depth, xOff) {
+    function layoutNodes(nodes, depth, xOff) {
       let tw = 0, pos = [];
       for (const n of nodes) {
         const kids = children[n.id] || [];
@@ -1044,16 +1044,16 @@ async function loadTree() {
       return { pos, tw: Math.max(tw, padX * 2) };
     }
 
-    const layout = layout(roots, 0, padX);
+    const computedLayout = layoutNodes(roots, 0, padX);
     let md = 0;
     (function mdepth(ns, d) { for (const p of ns) { md = Math.max(md, d); if (p.kids.length) mdepth(p.kids, d + 1); } })(layout.pos, 0);
-    const svgW = Math.max(layout.tw, 600), svgH = (md + 1) * levelH + padY * 2 + 20;
+    const svgW = Math.max(computedLayout.tw, 600), svgH = (md + 1) * levelH + padY * 2 + 20;
     svg.setAttribute('viewBox', "0 0 " + svgW + " " + svgH);
     svg.setAttribute('width', '100%');
 
     // Collect all
     let all = [];
-    (function collect(ps) { for (const p of ps) { all.push(p); if (p.kids.length) collect(p.kids); } })(layout.pos);
+    (function collect(ps) { for (const p of ps) { all.push(p); if (p.kids.length) collect(p.kids); } })(computedLayout.pos);
 
     // Gradient defs
     let defsHtml = '<defs>';
@@ -1088,7 +1088,7 @@ async function loadTree() {
     }
 
     // Nodes as cards
-    let nodes = '';
+    let svgNodes = '';
     for (const p of all) {
       const n = p.n;
       const c = getColor(n.personaName);
@@ -1099,7 +1099,7 @@ async function loadTree() {
       const fc = fitnessColor(n.fitness);
       const shortId = n.id.replace('agent_', 'A');
 
-      nodes += '<g class="tree-node" opacity="' + op + '" onclick="showTreeDetail(\'' + n.id + '\',\'' + n.personaName + '\',' + n.generation + ',' + n.fitness + ',' + alive + ')">';
+      svgNodes += '<g class="tree-node" opacity="' + op + '" onclick="showTreeDetail(\'' + n.id + '\',\'' + n.personaName + '\',' + n.generation + ',' + n.fitness + ',' + alive + ')">';
       // Card background
       nodes += '<rect x="' + x + '" y="' + y + '" width="' + cardW + '" height="' + cardH + '" rx="8" fill="url(#' + gradId + ')" stroke="' + (alive ? c : '#30363d') + '" stroke-width="' + (alive ? 2 : 1) + '" filter="url(#shadow)"/>';
       // Fitness bar at bottom
@@ -1116,7 +1116,7 @@ async function loadTree() {
       nodes += '</g>';
     }
 
-    svg.innerHTML = defsHtml + lines + nodes;
+    svg.innerHTML = defsHtml + lines + svgNodes;
   } catch (err) {
     console.error('Tree failed:', err);
   }
