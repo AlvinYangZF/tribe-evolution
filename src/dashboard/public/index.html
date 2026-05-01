@@ -1099,7 +1099,7 @@ async function loadTree() {
       const fc = fitnessColor(n.fitness);
       const shortId = n.id.replace('agent_', 'A');
 
-      nodes += '<g class="tree-node" opacity="' + op + '" onclick="showTreeDetail('' + n.id + '','' + n.personaName + '',' + n.generation + ',' + n.fitness + ',' + alive + ')">';
+      nodes += '<g class="tree-node" opacity="' + op + '" onclick="showTreeDetail(\'' + n.id + '\',\'' + n.personaName + '\',' + n.generation + ',' + n.fitness + ',' + alive + ')">';
       // Card background
       nodes += '<rect x="' + x + '" y="' + y + '" width="' + cardW + '" height="' + cardH + '" rx="8" fill="url(#' + gradId + ')" stroke="' + (alive ? c : '#30363d') + '" stroke-width="' + (alive ? 2 : 1) + '" filter="url(#shadow)"/>';
       // Fitness bar at bottom
@@ -1137,8 +1137,6 @@ function showTreeDetail(id, name, gen, fitness, alive) {
 function hideTreeTooltip() {
   const t = document.getElementById('tree-tooltip');
   if (t) t.classList.remove('visible');
-} {
-  document.getElementById('tree-tooltip').classList.remove('visible');
 }
 
 // Track mouse for tooltip positioning

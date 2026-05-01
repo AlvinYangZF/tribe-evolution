@@ -10,7 +10,7 @@
 
 import { loadConfig } from './config/index.js';
 import { Supervisor } from './supervisor/index.js';
-import { createRandomGenome } from './agent/genome.js';
+import { createRandomGenome, createRandomDiploidGenome, expressGenome, expressedToGenome } from './agent/genome.js';
 import { ensureDir, safeWriteJSON } from './shared/filesystem.js';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
@@ -38,19 +38,25 @@ async function seed(config: ReturnType<typeof loadConfig>) {
 
   for (let i = 0; i < 10; i++) {
     const template = roleTemplates[i];
-    const genome = createRandomGenome();
-    // Override with template
-    genome.personaName = template.name;
-    genome.traits = template.traits as any;
-    genome.collabBias = template.collabBias;
-    genome.riskTolerance = template.risk;
-    genome.communicationFreq = template.commFreq;
+    const gender: 'male' | 'female' = i < 5 ? 'male' : 'female';
+    const diploidGenome = createRandomDiploidGenome(gender);
+    // Override with template (set both dominant and recessive)
+    diploidGenome.personaName = { dominant: template.name, recessive: template.name };
+    diploidGenome.traits = template.traits.map(t => ({ dominant: t as any, recessive: t as any }));
+    diploidGenome.collabBias = { dominant: template.collabBias, recessive: template.collabBias };
+    diploidGenome.riskTolerance = { dominant: template.risk, recessive: template.risk };
+    diploidGenome.communicationFreq = { dominant: template.commFreq, recessive: template.commFreq };
+
+    // Express to get haploid genome for backward compatibility
+    const expressed = expressGenome(diploidGenome);
+    const genome = expressedToGenome(expressed);
 
     const agentId = `agent_${String(i + 1).padStart(3, '0')}`;
     const agentFile = path.join(agentsDir, agentId + '.json');
     await safeWriteJSON(agentFile, {
       id: agentId,
       genome,
+      diploidGenome,
       generation: 0,
       parentId: null,
       tokenBalance: config.defaultTokenPerCycle,
@@ -65,8 +71,11 @@ async function seed(config: ReturnType<typeof loadConfig>) {
       createdAt: Date.now(),
     });
 
-    console.log(`  🧬 ${agentId} — ${genome.personaName} (${genome.traits.join(', ')})`);
+    const genderEmoji = gender === 'male' ? '♂️' : '♀️';
+    console.log(`  🧬 ${agentId} — ${genome.personaName} ${genderEmoji} (${genome.traits.join(', ')})`);
   }
+
+  console.log(`  👤 5 male, 5 female agents`);
 
   // Init event log
   const eventLogDir = path.join(config.ecosystemDir, 'event-log');

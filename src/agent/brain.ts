@@ -41,6 +41,7 @@ export interface AgentStateForBrain {
   age: number;
   reputation: number;
   generation: number;
+  gender?: string;
 }
 
 /** Environment snapshot injected by the supervisor */

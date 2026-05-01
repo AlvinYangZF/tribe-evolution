@@ -29,6 +29,7 @@ export interface AgentState {
   alive: boolean;
   protectionRounds: number;  // 新生保护剩余轮数
   createdAt: number;
+  diploidGenome: DiploidGenome;
 }
 
 export interface Resource {
@@ -94,6 +95,38 @@ export interface LLMResponse {
   content: string;
   tokenUsage: { input: number; output: number; total: number };
   cost: number;
+}
+
+// ─── Sexual reproduction types ──────────────────────────────────────────────
+
+export type Gender = 'male' | 'female';
+
+/** A gene pair with dominant and recessive alleles */
+export interface GenePair<T> {
+  dominant: T;
+  recessive: T;
+}
+
+/** Diploid genome (two sets of genes) */
+export interface DiploidGenome {
+  gender: Gender;
+  personaName: GenePair<string>;
+  traits: GenePair<Trait>[];
+  skills: Record<SkillName, GenePair<number>>;
+  collabBias: GenePair<number>;
+  riskTolerance: GenePair<number>;
+  communicationFreq: GenePair<number>;
+}
+
+/** Expressed (haploid) genome after dominant/recessive resolution */
+export interface ExpressedGenome {
+  personaName: string;
+  gender: Gender;
+  traits: Trait[];
+  skills: Record<SkillName, number>;
+  collabBias: number;
+  riskTolerance: number;
+  communicationFreq: number;
 }
 
 // ─── Proposal types ───────────────────────────────────────────────────────
