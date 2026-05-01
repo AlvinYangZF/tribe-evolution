@@ -56,7 +56,8 @@
       background: var(--red); transition: background 0.3s;
     }
     #status-dot.connected { background: var(--accent); box-shadow: 0 0 8px var(--accent-dim); }
-    #status-dot.disconnected { background: var(--red); }
+    #status-dot.disconnected { background: var(--yellow); }
+    #status-dot.connecting { background: var(--yellow); animation: pulse 1.5s infinite; }
     #status-dot.connecting { background: var(--yellow); }
     #cycle-info { font-size: 0.85rem; color: var(--text-muted); }
 
@@ -449,8 +450,8 @@
 <header>
   <h1>🧬 <span>Tribe</span> Evolution Dashboard</h1>
   <div id="status-indicator">
-    <span id="status-dot" class="disconnected"></span>
-    <span id="status-text">Disconnected</span>
+    <span id="status-dot" class="connecting"></span>
+    <span id="status-text">Connecting...</span>
     <span id="cycle-info"></span>
   </div>
 </header>
@@ -591,7 +592,7 @@ function statusConnected() {
 }
 function statusDisconnected() {
   document.getElementById('status-dot').className = 'disconnected';
-  document.getElementById('status-text').textContent = 'Disconnected';
+  document.getElementById('status-text').textContent = 'REST mode';
 }
 function statusConnecting() {
   document.getElementById('status-dot').className = 'connecting';
