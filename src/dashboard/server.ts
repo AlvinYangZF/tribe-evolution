@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { randomBytes, createHash } from 'node:crypto';
 import { WebSocketServer, WebSocket } from 'ws';
 import { EventLog } from '../supervisor/event-log.js';
-import type { AgentState, EventLogEntry, Resource, Deal } from '../shared/types.js';
+import type { AgentState, EventLogEntry, Resource, Deal, EventType } from '../shared/types.js';
 import { safeReadJSON } from '../shared/filesystem.js';
 
 // ── ESM dirname shim ──────────────────────────────────────────────────────
@@ -53,6 +53,15 @@ interface ConfigResponse {
   newAgentProtectionRounds: number;
 }
 
+interface TreeAgentNode {
+  id: string;
+  personaName: string;
+  generation: number;
+  parentId: string | null;
+  alive: boolean;
+  fitness: number;
+}
+
 // ── Dashboard Server ──────────────────────────────────────────────────────
 
 export function startDashboard(ecosystemDir: string, port: number = 3000) {
@@ -97,14 +106,67 @@ export function startDashboard(ecosystemDir: string, port: number = 3000) {
     }
   }
 
-  async function loadEvents(limit: number = 50, offset: number = 0): Promise<EventLogEntry[]> {
+  async function loadAllEvents(): Promise<EventLogEntry[]> {
     const all: EventLogEntry[] = [];
     for await (const entry of eventLog.replay(0)) {
       all.push(entry);
     }
+    return all;
+  }
+
+  async function loadEvents(limit: number = 50, offset: number = 0, type?: string): Promise<EventLogEntry[]> {
+    const all = await loadAllEvents();
+    let filtered = all;
+    if (type && type !== 'all') {
+      filtered = all.filter(e => e.type === type);
+    }
     // Reverse chronological order
-    const reversed = all.reverse();
+    const reversed = filtered.reverse();
     return reversed.slice(offset, offset + limit);
+  }
+
+  async function loadEventById(idStr: string): Promise<{ event: EventLogEntry; relatedEvents: EventLogEntry[] } | null> {
+    const index = parseInt(idStr, 10);
+    if (isNaN(index)) return null;
+    const all = await loadAllEvents();
+    const event = all.find(e => e.index === index);
+    if (!event) return null;
+
+    // Find related events from same agent (up to 5 before, 5 after)
+    const agentEvents = all.filter(e => e.agentId === event.agentId);
+    const eventIdxInAgentEvents = agentEvents.findIndex(e => e.index === index);
+    const start = Math.max(0, eventIdxInAgentEvents - 5);
+    const end = Math.min(agentEvents.length, eventIdxInAgentEvents + 6);
+    const relatedEvents = agentEvents.slice(start, end).filter(e => e.index !== index);
+
+    return { event, relatedEvents };
+  }
+
+  async function loadTree(): Promise<{ nodes: TreeAgentNode[] }> {
+    const nodes: TreeAgentNode[] = [];
+    try {
+      const dir = await fs.readdir(agentsDir);
+      for (const file of dir) {
+        if (!file.endsWith('.json')) continue;
+        try {
+          const raw = await fs.readFile(path.join(agentsDir, file), 'utf-8');
+          const state = JSON.parse(raw) as AgentState;
+          nodes.push({
+            id: state.id,
+            personaName: state.genome.personaName,
+            generation: state.generation,
+            parentId: state.parentId,
+            alive: state.alive,
+            fitness: state.fitness,
+          });
+        } catch {
+          // skip corrupted files
+        }
+      }
+    } catch {
+      // agents dir doesn't exist
+    }
+    return { nodes };
   }
 
   async function loadConfig(): Promise<ConfigResponse> {
@@ -250,9 +312,28 @@ export function startDashboard(ecosystemDir: string, port: number = 3000) {
       if (pathname === '/api/events' && req.method === 'GET') {
         const limit = parseInt(url.searchParams.get('limit') || '50', 10);
         const offset = parseInt(url.searchParams.get('offset') || '0', 10);
-        const events = await loadEvents(limit, offset);
+        const type = url.searchParams.get('type') || 'all';
+        const events = await loadEvents(limit, offset, type);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(events));
+        return;
+      }
+
+      if (pathname.startsWith('/api/events/') && req.method === 'GET') {
+        const idStr = pathname.slice('/api/events/'.length);
+        if (!idStr) {
+          res.writeHead(400);
+          res.end(JSON.stringify({ error: 'Missing event index' }));
+          return;
+        }
+        const result = await loadEventById(idStr);
+        if (!result) {
+          res.writeHead(404);
+          res.end(JSON.stringify({ error: 'Event not found' }));
+          return;
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(result));
         return;
       }
 
@@ -275,6 +356,13 @@ export function startDashboard(ecosystemDir: string, port: number = 3000) {
         const config = await loadConfig();
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(config));
+        return;
+      }
+
+      if (pathname === '/api/tree' && req.method === 'GET') {
+        const tree = await loadTree();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(tree));
         return;
       }
 

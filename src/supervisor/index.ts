@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events';
 import path from 'node:path';
 import { EventLog } from './event-log.js';
 import { Scheduler } from './scheduler.js';
+import { ProposalManager } from './proposal.js';
 import type { Config } from '../config/index.js';
 import { ensureDir } from '../shared/filesystem.js';
 
@@ -14,12 +15,15 @@ export class Supervisor extends EventEmitter {
   private config: Config;
   private eventLog: EventLog;
   private scheduler: Scheduler;
+  private proposalManager: ProposalManager;
+  private lastProposalCount: number = 0;
   private started = false;
 
   constructor(config: Config) {
     super();
     this.config = config;
     this.eventLog = new EventLog(config.ecosystemDir);
+    this.proposalManager = new ProposalManager(config.ecosystemDir);
     this.scheduler = new Scheduler({
       cycleIntervalMs: config.cycleIntervalMs,
     });
@@ -99,6 +103,9 @@ export class Supervisor extends EventEmitter {
     // For now, emit lifecycle events
     this.emit('tokenRefresh', cycleNum);
 
+    // Scan for new pending proposals
+    await this.scanProposals();
+
     // Record cycle end
     await this.eventLog.append({
       type: 'task_completed',
@@ -109,6 +116,44 @@ export class Supervisor extends EventEmitter {
         timestamp: Date.now(),
       },
     });
+  }
+
+  /**
+   * Scan for pending proposals and log new ones.
+   */
+  private async scanProposals(): Promise<void> {
+    try {
+      const pending = await this.proposalManager.getPendingProposals();
+
+      // Report new proposals (those beyond what we last saw)
+      if (pending.length > this.lastProposalCount) {
+        const newProposals = pending.slice(this.lastProposalCount);
+        for (const p of newProposals) {
+          console.log(`\n📩 [PROPOSAL] ${p.agentId}: "${p.title}"`);
+        }
+
+        // Log to event log
+        for (const p of newProposals) {
+          await this.eventLog.append({
+            type: 'proposal_created',
+            agentId: p.agentId,
+            data: { proposalId: p.id, title: p.title },
+          });
+        }
+      }
+
+      this.lastProposalCount = pending.length;
+
+      // Clean up expired proposals
+      const expired = await this.proposalManager.expireOldProposals();
+      if (expired > 0) {
+        console.log(`🧹 Expired ${expired} stale proposal(s)`);
+      }
+    } catch (err) {
+      // Don't let proposal errors crash the cycle
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`⚠️ Proposal scan error: ${msg}`);
+    }
   }
 
   /**
@@ -133,6 +178,13 @@ export class Supervisor extends EventEmitter {
    */
   getEventLog(): EventLog {
     return this.eventLog;
+  }
+
+  /**
+   * Get the proposal manager instance (for testing/verification).
+   */
+  getProposalManager(): ProposalManager {
+    return this.proposalManager;
   }
 
   /**

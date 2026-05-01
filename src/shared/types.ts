@@ -95,3 +95,24 @@ export interface LLMResponse {
   tokenUsage: { input: number; output: number; total: number };
   cost: number;
 }
+
+// ─── Proposal types ───────────────────────────────────────────────────────
+
+export type ProposalType = 'new_skill' | 'task_suggestion' | 'policy_change' | 'resource_request';
+export type ProposalStatus = 'pending' | 'approved' | 'rejected' | 'expired';
+
+export interface Proposal {
+  id: string;
+  agentId: string;
+  type: ProposalType;
+  title: string;
+  description: string;
+  expectedBenefit: string;
+  tokenCost: number;
+  tokenReward: number;
+  status: ProposalStatus;
+  reviewedBy: string | null;
+  reviewNote: string | null;
+  createdAt: number;
+  reviewedAt: number | null;
+}

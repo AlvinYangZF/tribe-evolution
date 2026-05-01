@@ -94,6 +94,114 @@
       gap: 8px;
     }
 
+    /* ── Modal ── */
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.7);
+      z-index: 1000;
+      align-items: center;
+      justify-content: center;
+    }
+    .modal-overlay.active { display: flex; }
+    .modal {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      max-width: 700px;
+      width: 90%;
+      max-height: 80vh;
+      overflow-y: auto;
+      padding: 20px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+    }
+    .modal::-webkit-scrollbar { width: 6px; }
+    .modal::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+    .modal h3 {
+      margin-bottom: 16px;
+      font-size: 1.1rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .modal-close {
+      background: none; border: none; color: var(--text-muted);
+      font-size: 1.5rem; cursor: pointer; padding: 0 4px;
+      line-height: 1;
+    }
+    .modal-close:hover { color: var(--text-primary); }
+    .modal-detail-row {
+      display: flex;
+      padding: 6px 0;
+      border-bottom: 1px solid var(--border);
+      font-size: 0.85rem;
+      font-family: 'SF Mono', 'Fira Code', monospace;
+    }
+    .modal-detail-label {
+      color: var(--text-muted);
+      min-width: 100px;
+      flex-shrink: 0;
+    }
+    .modal-detail-value {
+      color: var(--text-primary);
+      word-break: break-all;
+    }
+    .modal-detail-data {
+      grid-column: 1 / -1;
+      background: var(--bg-primary);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 8px;
+      margin-top: 4px;
+      font-size: 0.78rem;
+      white-space: pre-wrap;
+      word-break: break-all;
+      max-height: 200px;
+      overflow-y: auto;
+    }
+    .modal-section-title {
+      font-size: 0.85rem;
+      color: var(--text-secondary);
+      margin-top: 16px;
+      margin-bottom: 8px;
+      font-weight: 500;
+    }
+    .related-event {
+      padding: 4px 8px;
+      border-radius: 4px;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      margin-bottom: 4px;
+      font-size: 0.8rem;
+      cursor: pointer;
+      display: flex;
+      gap: 8px;
+    }
+    .related-event:hover { border-color: var(--accent-dim); }
+    .related-event.current {
+      border-color: var(--accent);
+      background: var(--bg-hover);
+    }
+
+    /* ── Event filter ── */
+    .event-filter-bar {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 8px;
+      align-items: center;
+    }
+    .event-filter-select {
+      background: var(--bg-primary);
+      border: 1px solid var(--border);
+      color: var(--text-primary);
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-size: 0.78rem;
+      cursor: pointer;
+    }
+    .event-filter-select:focus { outline: none; border-color: var(--accent-dim); }
+
     /* ── Agent Cards ── */
     #agent-grid {
       display: grid;
@@ -249,6 +357,42 @@
     .status-completed { background: #1a3f1a; color: var(--accent); }
     .status-breached { background: #3f1a1a; color: var(--red); }
 
+    /* ── Evolution Tree ── */
+    .tree-panel {
+      grid-column: 1 / -1;
+    }
+    .tree-panel .card {
+      min-height: 400px;
+    }
+    #tree-container {
+      width: 100%;
+      min-height: 350px;
+      position: relative;
+      overflow: auto;
+    }
+    #tree-svg {
+      display: block;
+      width: 100%;
+    }
+    .tree-tooltip {
+      position: absolute;
+      display: none;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 8px 12px;
+      font-size: 0.8rem;
+      pointer-events: none;
+      z-index: 100;
+      white-space: nowrap;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+    }
+    .tree-tooltip.visible { display: block; }
+    .tree-tooltip .tt-name { font-weight: 600; }
+    .tree-tooltip .tt-row { color: var(--text-secondary); margin-top: 2px; }
+    .tree-tooltip .tt-alive { color: var(--accent); }
+    .tree-tooltip .tt-dead { color: var(--red); }
+
     /* ── Empty State ── */
     .empty-state {
       text-align: center;
@@ -293,6 +437,17 @@
 <!-- Main Grid -->
 <main class="dashboard-grid">
 
+  <!-- Event Detail Modal -->
+  <div id="event-modal" class="modal-overlay">
+    <div class="modal">
+      <h3>
+        <span id="modal-title">📜 Event Details</span>
+        <button class="modal-close" onclick="closeModal()">✕</button>
+      </h3>
+      <div id="modal-body"></div>
+    </div>
+  </div>
+
   <!-- Left: Agent Cards -->
   <section class="card">
     <h2>🤖 Agents (<span id="agent-count">0</span>)</h2>
@@ -326,6 +481,19 @@
     <!-- Event Timeline -->
     <section class="card">
       <h2>📜 Event Timeline</h2>
+      <div class="event-filter-bar">
+        <select id="event-type-filter" class="event-filter-select" onchange="applyEventFilter()">
+          <option value="all">全部</option>
+          <option value="token_allocated">token_allocated</option>
+          <option value="task_completed">task_completed</option>
+          <option value="deal_kept">deal_kept</option>
+          <option value="deal_broken">deal_broken</option>
+          <option value="agent_born">agent_born</option>
+          <option value="agent_extinct">agent_extinct</option>
+          <option value="mutation">mutation</option>
+        </select>
+        <span style="color:var(--text-muted);font-size:0.78rem;margin-left:auto;">点击事件查看详情</span>
+      </div>
       <div id="event-timeline">
         <div class="empty-state"><em>📜</em>Waiting for events...</div>
       </div>
@@ -351,6 +519,16 @@
     </section>
 
   </section>
+
+  <!-- Evolution Tree -->
+  <section class="card tree-panel">
+    <h2>🌳 进化树</h2>
+    <div id="tree-container">
+      <svg id="tree-svg"></svg>
+      <div id="tree-tooltip" class="tree-tooltip"></div>
+    </div>
+  </section>
+
 </main>
 
 <!-- Footer -->
@@ -638,22 +816,119 @@ function updateDashboard(data) {
   }
 }
 
+// ── Event Detail Modal ──
+async function openEventDetail(eventIndex) {
+  try {
+    const res = await fetch(`/api/events/${eventIndex}`);
+    if (!res.ok) {
+      document.getElementById('modal-body').innerHTML = '<p style="color:var(--red)">Failed to load event</p>';
+      document.getElementById('event-modal').classList.add('active');
+      return;
+    }
+    const { event, relatedEvents } = await res.json();
+
+    const dataStr = JSON.stringify(event.data, null, 2);
+    const niceType = event.type.replace(/_/g, ' ');
+
+    let relatedHtml = '';
+    if (relatedEvents && relatedEvents.length > 0) {
+      relatedHtml = `<div class="modal-section-title">🔄 关联事件 (Agent ${event.agentId})</div>`;
+      relatedHtml += relatedEvents.map(re => `
+        <div class="related-event ${re.index === event.index ? 'current' : ''}" onclick="openEventDetail(${re.index})">
+          <span class="event-time">${fmtTime(re.timestamp)}</span>
+          <span class="event-icon">${eventIcon(re.type)}</span>
+          <span class="event-msg">${eventMsg(re)}</span>
+        </div>
+      `).join('');
+    }
+
+    document.getElementById('modal-title').textContent = `📜 ${niceType}`;
+    document.getElementById('modal-body').innerHTML = `
+      <div class="modal-detail-row">
+        <span class="modal-detail-label">Index</span>
+        <span class="modal-detail-value">${event.index}</span>
+      </div>
+      <div class="modal-detail-row">
+        <span class="modal-detail-label">Type</span>
+        <span class="modal-detail-value event-type-${event.type}">${event.type}</span>
+      </div>
+      <div class="modal-detail-row">
+        <span class="modal-detail-label">Timestamp</span>
+        <span class="modal-detail-value">${new Date(event.timestamp).toLocaleString()}</span>
+      </div>
+      <div class="modal-detail-row">
+        <span class="modal-detail-label">Agent</span>
+        <span class="modal-detail-value">${event.agentId}</span>
+      </div>
+      <div class="modal-detail-row">
+        <span class="modal-detail-label">prevHash</span>
+        <span class="modal-detail-value" style="font-size:0.7rem;">${event.prevHash}</span>
+      </div>
+      <div class="modal-detail-row">
+        <span class="modal-detail-label">hash</span>
+        <span class="modal-detail-value" style="font-size:0.7rem;">${event.hash}</span>
+      </div>
+      <div class="modal-detail-row">
+        <span class="modal-detail-label">Data</span>
+        <div class="modal-detail-data">${dataStr}</div>
+      </div>
+      ${relatedHtml}
+    `;
+    document.getElementById('event-modal').classList.add('active');
+  } catch (err) {
+    console.error('Failed to load event detail:', err);
+  }
+}
+
+function closeModal() {
+  document.getElementById('event-modal').classList.remove('active');
+}
+
+// Close modal on overlay click
+document.getElementById('event-modal').addEventListener('click', (e) => {
+  if (e.target === e.currentTarget) closeModal();
+});
+
+// Close modal on Escape key
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') closeModal();
+});
+
+// ── Event Filter ──
+let allEvents = [];
+
+async function applyEventFilter() {
+  const filter = document.getElementById('event-type-filter').value;
+  try {
+    const res = await fetch(`/api/events?limit=100&offset=0&type=${filter}`);
+    const events = await res.json();
+    renderEvents(events);
+  } catch (err) {
+    console.error('Filter failed:', err);
+  }
+}
+
 // ── Event Timeline ──
-function updateEvents(events) {
+function renderEvents(events) {
   const container = document.getElementById('event-timeline');
   if (!events || events.length === 0) {
-    container.innerHTML = '<div class="empty-state"><em>📜</em>No events yet</div>';
+    container.innerHTML = '<div class="empty-state"><em>📜</em>No events</div>';
     return;
   }
 
   const html = events.slice(0, 80).map(e => `
-    <div class="event-entry event-type-${e.type}">
+    <div class="event-entry event-type-${e.type}" onclick="openEventDetail(${e.index})" style="cursor:pointer;">
       <span class="event-time">${fmtTime(e.timestamp)}</span>
       <span class="event-icon">${eventIcon(e.type)}</span>
       <span class="event-msg">${eventMsg(e)}</span>
     </div>
   `).join('');
   container.innerHTML = html;
+}
+
+function updateEvents(events) {
+  allEvents = events;
+  renderEvents(events);
 }
 
 // ── Market ──
@@ -694,6 +969,208 @@ function updateMarket(market) {
   }
 }
 
+// ── Evolution Tree ──
+const ROLE_TREE_COLORS = {
+  'Explorer': '#58a6ff',
+  'Worker': '#39d353',
+  'Trader': '#d29922',
+  'Creator': '#bc8cff',
+  'Guardian': '#f85149',
+  'Helper': '#79c0ff',
+  'Scholar': '#e3b341',
+  'Herder': '#3fb950',
+  'Researcher': '#58a6ff',
+  'Builder': '#39d353',
+};
+
+function getTreeRoleColor(role) {
+  return ROLE_TREE_COLORS[role] || '#8b949e';
+}
+
+async function loadTree() {
+  const svg = document.getElementById('tree-svg');
+  const tooltip = document.getElementById('tree-tooltip');
+  const container = document.getElementById('tree-container');
+
+  try {
+    const res = await fetch('/api/tree');
+    if (!res.ok) {
+      svg.innerHTML = '';
+      return;
+    }
+    const { nodes } = await res.json();
+    if (!nodes || nodes.length === 0) {
+      svg.innerHTML = '';
+      return;
+    }
+
+    // Build tree structure
+    const children = {};
+    let roots = [];
+    for (const node of nodes) {
+      if (node.parentId === null) {
+        roots.push(node);
+      } else {
+        if (!children[node.parentId]) children[node.parentId] = [];
+        children[node.parentId].push(node);
+      }
+    }
+
+    // Calculate layout
+    const nodeRadius = 20;
+    const levelHeight = 100;
+    const minHorizontalSpacing = 80;
+    const paddingX = 40;
+    const paddingY = 30;
+
+    // Assign x positions using DFS
+    function layoutTree(nodeList, depth, xOffset) {
+      let totalWidth = 0;
+      const positioned = [];
+
+      for (const node of nodeList) {
+        const nodeChildren = children[node.id] || [];
+        let subWidth;
+        let childPositions;
+
+        if (nodeChildren.length === 0) {
+          subWidth = minHorizontalSpacing;
+          childPositions = [];
+        } else {
+          const result = layoutTree(nodeChildren, depth + 1, 0);
+          childPositions = result.nodes;
+          subWidth = result.totalWidth;
+        }
+
+        // Center this node above its children, or use default spacing
+        let nodeX;
+        if (childPositions.length > 0) {
+          const firstX = childPositions[0].x;
+          const lastX = childPositions[childPositions.length - 1].x;
+          nodeX = (firstX + lastX) / 2;
+        } else {
+          nodeX = subWidth / 2;
+        }
+
+        positioned.push({ node, x: nodeX + xOffset, y: depth * levelHeight + paddingY, children: childPositions });
+        xOffset += subWidth;
+        totalWidth += subWidth;
+      }
+
+      return { nodes: positioned, totalWidth: Math.max(totalWidth, paddingX * 2) };
+    }
+
+    const layout = layoutTree(roots, 0, paddingX);
+    const svgWidth = Math.max(layout.totalWidth, 600);
+    const svgHeight = (roots.length > 0 ? 1 : 0) * levelHeight + paddingY * 2 + 50;
+    // Estimate max depth
+    let maxDepth = 0;
+    function measureDepth(nodeList, d) {
+      for (const n of nodeList) {
+        maxDepth = Math.max(maxDepth, d);
+        const nc = children[n.id] || [];
+        if (nc.length > 0) measureDepth(nc, d + 1);
+      }
+    }
+    measureDepth(roots, 0);
+    const finalHeight = (maxDepth + 1) * levelHeight + paddingY * 2 + 30;
+
+    svg.setAttribute('viewBox', `0 0 ${svgWidth} ${finalHeight}`);
+    svg.setAttribute('width', '100%');
+    svg.setAttribute('height', finalHeight);
+
+    // Build SVG content
+    let svgContent = '';
+    let lines = '';
+    let circles = '';
+
+    // Collect all positioned nodes
+    const allPositions = [];
+    function collectPositions(posList) {
+      for (const p of posList) {
+        allPositions.push(p);
+        if (p.children && p.children.length > 0) collectPositions(p.children);
+      }
+    }
+    collectPositions(layout.nodes);
+
+    // Draw lines first
+    for (const p of allPositions) {
+      if (p.children && p.children.length > 0) {
+        const childYs = p.children.map(c => c.y);
+        const minChildY = Math.min(...childYs);
+        const maxChildY = Math.max(...childYs);
+        if (p.children.length === 1) {
+          // Single child: straight line
+          lines += `<line x1="${p.x}" y1="${p.y + nodeRadius}" x2="${p.children[0].x}" y2="${p.children[0].y - nodeRadius}" stroke="#30363d" stroke-width="2"/>`;
+        } else {
+          // Multiple children: vertical line + horizontal connector
+          const midY = p.y + nodeRadius + 25;
+          lines += `<line x1="${p.x}" y1="${p.y + nodeRadius}" x2="${p.x}" y2="${midY}" stroke="#30363d" stroke-width="2"/>`;
+          const firstX = p.children[0].x;
+          const lastX = p.children[p.children.length - 1].x;
+          lines += `<line x1="${firstX}" y1="${midY}" x2="${lastX}" y2="${midY}" stroke="#30363d" stroke-width="2"/>`;
+          for (const child of p.children) {
+            lines += `<line x1="${child.x}" y1="${midY}" x2="${child.x}" y2="${child.y - nodeRadius}" stroke="#30363d" stroke-width="2"/>`;
+          }
+        }
+      }
+    }
+
+    // Draw nodes
+    for (const p of allPositions) {
+      const node = p.node;
+      const color = getTreeRoleColor(node.personaName);
+      const radius = Math.max(10, Math.min(28, 10 + node.fitness * 0.2));
+      const opacity = node.alive ? 1 : 0.4;
+      const strokeWidth = node.alive ? 2 : 1;
+
+      const initial = node.personaName.charAt(0).toUpperCase();
+      const labelY = p.y + radius + 14;
+
+      circles += `
+        <g style="cursor:pointer"
+           onmouseenter="showTreeTooltip('${node.id}', '${node.personaName}', ${node.generation}, ${node.fitness}, ${node.alive})"
+           onmouseleave="hideTreeTooltip()">
+          <circle cx="${p.x}" cy="${p.y}" r="${radius}" fill="${color}" fill-opacity="${opacity}" stroke="${color}" stroke-width="${strokeWidth}" stroke-opacity="${opacity}"/>
+          <text x="${p.x}" y="${p.y}" text-anchor="middle" dominant-baseline="central" fill="#fff" font-size="${radius > 18 ? 14 : 11}" font-weight="bold" opacity="${opacity}">${initial}</text>
+          <text x="${p.x}" y="${labelY}" text-anchor="middle" fill="#8b949e" font-size="11" opacity="${opacity}">${node.id.replace('agent_', '')}</text>
+        </g>`;
+    }
+
+    svg.innerHTML = lines + circles;
+  } catch (err) {
+    console.error('Failed to load tree:', err);
+  }
+}
+
+let tooltipTimeout = null;
+
+function showTreeTooltip(id, name, generation, fitness, alive) {
+  const tooltip = document.getElementById('tree-tooltip');
+  tooltip.innerHTML = `
+    <div class="tt-name">${name} (${id})</div>
+    <div class="tt-row">🧬 Generation: ${generation}</div>
+    <div class="tt-row">💪 Fitness: ${fitness.toFixed(1)}</div>
+    <div class="tt-row ${alive ? 'tt-alive' : 'tt-dead'}">${alive ? '✅ Alive' : '💀 Extinct'}</div>
+  `;
+  tooltip.classList.add('visible');
+}
+
+function hideTreeTooltip() {
+  document.getElementById('tree-tooltip').classList.remove('visible');
+}
+
+// Track mouse for tooltip positioning
+document.getElementById('tree-container').addEventListener('mousemove', (e) => {
+  const tooltip = document.getElementById('tree-tooltip');
+  if (tooltip.classList.contains('visible')) {
+    const rect = e.currentTarget.getBoundingClientRect();
+    tooltip.style.left = (e.clientX - rect.left + 12) + 'px';
+    tooltip.style.top = (e.clientY - rect.top - 10) + 'px';
+  }
+});
+
 // ── Initial Load via REST ──
 async function loadInitialData() {
   try {
@@ -707,6 +1184,7 @@ async function loadInitialData() {
     updateDashboard({ agents, stats });
     updateEvents(events);
     updateMarket(market);
+    loadTree();
   } catch (err) {
     console.error('Initial load failed:', err);
   }

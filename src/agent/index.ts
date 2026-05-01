@@ -13,6 +13,7 @@ import { createRandomGenome } from './genome.js';
 import { decide } from './brain.js';
 import type { AgentDecision, AgentEnvironmentForBrain, AgentStateForBrain } from './brain.js';
 import type { Genome } from '../shared/types.js';
+import { ProposalManager } from '../supervisor/proposal.js';
 import * as readline from 'node:readline';
 
 // ─── Local LLM call ─────────────────────────────────────────────────────────
@@ -76,9 +77,14 @@ interface RPCResponse {
 class AgentProcess {
   private genome: Genome;
   private tokenBalance: number = 0;
+  private proposalManager: ProposalManager | null = null;
 
   constructor() {
     this.genome = createRandomGenome();
+    const ecosystemDir = process.env.ECOSYSTEM_DIR;
+    if (ecosystemDir) {
+      this.proposalManager = new ProposalManager(ecosystemDir);
+    }
   }
 
   async handle(request: RPCRequest): Promise<RPCResponse> {
@@ -97,6 +103,14 @@ class AgentProcess {
 
       case 'think_cycle': {
         return this.handleThinkCycle(request);
+      }
+
+      case 'create_proposal': {
+        return this.handleCreateProposal(request);
+      }
+
+      case 'list_proposals': {
+        return this.handleListProposals(request);
       }
 
       default:
@@ -147,6 +161,101 @@ class AgentProcess {
             reasoning: `Brain error: ${(err as Error).message}`,
           },
         },
+      };
+    }
+  }
+
+  private async handleCreateProposal(request: RPCRequest): Promise<RPCResponse> {
+    if (!this.proposalManager) {
+      return {
+        id: request.id,
+        error: { code: -32603, message: 'ECOSYSTEM_DIR not configured, proposals disabled' },
+      };
+    }
+
+    const params = request.params as Record<string, unknown> | undefined;
+    if (!params) {
+      return {
+        id: request.id,
+        error: { code: -32602, message: 'Missing params' },
+      };
+    }
+
+    const type = params.type as string;
+    const title = params.title as string;
+    const description = params.description as string;
+    const expectedBenefit = params.expectedBenefit as string;
+    const tokenCost = params.tokenCost as number;
+    const tokenReward = params.tokenReward as number;
+
+    // Validate required fields
+    if (!type || !title || !description || !expectedBenefit || tokenCost == null || tokenReward == null) {
+      return {
+        id: request.id,
+        error: { code: -32602, message: 'Missing required params: type, title, description, expectedBenefit, tokenCost, tokenReward' },
+      };
+    }
+
+    // Validate type
+    const validTypes = ['new_skill', 'task_suggestion', 'policy_change', 'resource_request'];
+    if (!validTypes.includes(type)) {
+      return {
+        id: request.id,
+        error: { code: -32602, message: `Invalid proposal type: ${type}` },
+      };
+    }
+
+    // Check token balance
+    if (this.tokenBalance < (tokenCost as number)) {
+      return {
+        id: request.id,
+        error: { code: -32000, message: `Insufficient tokens: have ${this.tokenBalance}, need ${tokenCost}` },
+      };
+    }
+
+    try {
+      const proposal = await this.proposalManager.createProposal('agent', {
+        type: type as any,
+        title: title as string,
+        description: description as string,
+        expectedBenefit: expectedBenefit as string,
+        tokenCost: tokenCost as number,
+        tokenReward: tokenReward as number,
+      });
+
+      // Deduct token cost (proposal deposit)
+      this.tokenBalance -= tokenCost as number;
+
+      return {
+        id: request.id,
+        result: { proposalId: proposal.id },
+      };
+    } catch (err) {
+      return {
+        id: request.id,
+        error: { code: -32603, message: `Failed to create proposal: ${(err as Error).message}` },
+      };
+    }
+  }
+
+  private async handleListProposals(request: RPCRequest): Promise<RPCResponse> {
+    if (!this.proposalManager) {
+      return {
+        id: request.id,
+        error: { code: -32603, message: 'ECOSYSTEM_DIR not configured, proposals disabled' },
+      };
+    }
+
+    try {
+      const proposals = await this.proposalManager.getAgentProposals('agent');
+      return {
+        id: request.id,
+        result: { proposals },
+      };
+    } catch (err) {
+      return {
+        id: request.id,
+        error: { code: -32603, message: `Failed to list proposals: ${(err as Error).message}` },
       };
     }
   }
