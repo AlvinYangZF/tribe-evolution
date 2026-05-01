@@ -236,7 +236,10 @@ export function runCycle(agents: AgentState[], cycleNumber: number, maxAgents: n
   }
   survivors = sortedSurvivors;
 
-  const eliminatedCount = Math.min(eliminated.length, maxAgents - survivors.length + eliminated.length);
+  // After cap enforcement, survivors are already at or below maxAgents.
+  // Only reproduce enough to fill slots if we have room.
+  const slots = Math.max(0, maxAgents - survivors.length);
+  const eliminatedCount = Math.min(eliminated.length, slots);
 
   // Step 3: Reproduce
   const offspring = reproduce(ranked, eliminatedCount);

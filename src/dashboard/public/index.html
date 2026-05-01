@@ -362,36 +362,57 @@
       grid-column: 1 / -1;
     }
     .tree-panel .card {
-      min-height: 400px;
+      min-height: 500px;
     }
     #tree-container {
       width: 100%;
-      min-height: 350px;
+      min-height: 450px;
+      height: 60vh;
       position: relative;
-      overflow: auto;
+      overflow: hidden;
+      border-radius: 6px;
+      background: #0a0e14;
     }
     #tree-svg {
       display: block;
       width: 100%;
+      height: 100%;
+      min-height: 450px;
+      cursor: grab;
+    }
+    #tree-svg:active {
+      cursor: grabbing;
     }
     .tree-tooltip {
       position: absolute;
       display: none;
-      background: var(--bg-secondary);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: 8px 12px;
-      font-size: 0.8rem;
+      background: #1a1f29;
+      border: 1px solid #30363d;
+      border-radius: 10px;
+      padding: 10px 14px;
+      font-size: 0.82rem;
       pointer-events: none;
-      z-index: 100;
-      white-space: nowrap;
-      box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+      z-index: 1000;
+      min-width: 160px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.6), 0 2px 8px rgba(0,0,0,0.4);
+      backdrop-filter: blur(4px);
     }
     .tree-tooltip.visible { display: block; }
-    .tree-tooltip .tt-name { font-weight: 600; }
-    .tree-tooltip .tt-row { color: var(--text-secondary); margin-top: 2px; }
-    .tree-tooltip .tt-alive { color: var(--accent); }
-    .tree-tooltip .tt-dead { color: var(--red); }
+    .tree-tooltip .tt-name { font-weight: 700; font-size: 0.9rem; margin-bottom: 4px; }
+    .tree-tooltip .tt-row { color: var(--text-secondary); margin-top: 3px; font-size: 0.8rem; display: flex; align-items: center; gap: 4px; }
+    .tree-tooltip .tt-label { color: var(--text-muted); min-width: 70px; }
+    .tree-tooltip .tt-alive { color: var(--accent); font-weight: 600; }
+    .tree-tooltip .tt-dead { color: var(--red); font-weight: 600; }
+    .tree-tooltip .tt-role-badge {
+      display: inline-block;
+      padding: 1px 8px;
+      border-radius: 4px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: #fff;
+    }
+    .tree-node { transition: transform 0.12s ease; }
+    .tree-node:hover { transform: translateY(-2px); }
 
     /* ── Empty State ── */
     .empty-state {
