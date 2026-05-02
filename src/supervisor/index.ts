@@ -18,11 +18,7 @@ import type { AgentState, SkillName } from '../shared/types.js';
 
 const ALL_SKILL_NAMES: SkillName[] = ['web_search', 'code_write', 'data_analyze', 'artifact_write', 'observe', 'propose'];
 
-// Proposal cooldown tracker: agent must wait N cycles between proposals
-const agentLastProposal = new Map<string, number>();
-
-// Pending digest: auto-approved proposals queued for summary email
-const pendingDigest: Array<{id: string; agentId: string; title: string; status: string}> = [];
+type DigestEntry = { id: string; agentId: string; title: string; status: string };
 
 /**
  * Automatic proposal evaluation by Supervisor.
@@ -128,6 +124,8 @@ async function decideForAgent(
   bountyBoard: BountyBoard,
   notifyConfig: NotifyConfig,
   saveAgent: (a: AgentState) => Promise<void>,
+  agentLastProposal: Map<string, number>,
+  pendingDigest: DigestEntry[],
 ): Promise<void> {
   agent.age += 1;
   const g = agent.genome;
@@ -302,6 +300,12 @@ export class Supervisor extends EventEmitter {
   private proposalManager: ProposalManager;
   private bountyBoard: BountyBoard;
   private seenProposalIds: Set<string> = new Set();
+  // Proposal cooldown tracker: agent must wait N cycles between proposals.
+  // In-memory; resets on restart (acceptable, since the worst case is one
+  // extra proposal from a chatty agent right after a restart).
+  private agentLastProposal: Map<string, number> = new Map();
+  // Auto-approved proposals queued for the every-3-cycles digest email.
+  private pendingDigest: DigestEntry[] = [];
   private started = false;
   private agents: Map<string, AgentState> = new Map();
   private dashboard: { broadcast: () => Promise<void> } | null = null;
@@ -402,7 +406,17 @@ export class Supervisor extends EventEmitter {
     // LLM-powered decisions for each agent (parallel)
     const results = await Promise.allSettled(
       alive.map(agent =>
-        decideForAgent(agent, cycleNum, alive.length, this.proposalManager, this.bountyBoard, this.getNotifyConfig(), this.saveAgent.bind(this))
+        decideForAgent(
+          agent,
+          cycleNum,
+          alive.length,
+          this.proposalManager,
+          this.bountyBoard,
+          this.getNotifyConfig(),
+          this.saveAgent.bind(this),
+          this.agentLastProposal,
+          this.pendingDigest,
+        )
       )
     );
 
@@ -443,15 +457,15 @@ export class Supervisor extends EventEmitter {
     await this.checkEmailReplies();
 
     // Send digest email every 3 cycles with auto-approved proposals
-    if (cycleNum % 3 === 0 && pendingDigest.length > 0) {
+    if (cycleNum % 3 === 0 && this.pendingDigest.length > 0) {
       const digestLines = [
         '🧬 Tribe Evolution — 提案摘要',
         '='.repeat(40),
         `Cycle ${cycleNum} | ${alive.length} agents alive`,
         '',
-        `Supervisor 自动审批了 ${pendingDigest.length} 条提案:`,
+        `Supervisor 自动审批了 ${this.pendingDigest.length} 条提案:`,
       ];
-      for (const p of pendingDigest) {
+      for (const p of this.pendingDigest) {
         digestLines.push(`  ${p.status === 'approved' ? '✅' : '❌'} [${p.agentId.slice(0,8)}] ${p.title.slice(0,60)}`);
       }
       digestLines.push('');
@@ -461,12 +475,12 @@ export class Supervisor extends EventEmitter {
       notifyUser(this.getNotifyConfig(), {
         agentId: 'supervisor',
         type: 'task_suggestion',
-        title: `Digest: ${pendingDigest.length} auto-approved proposals`,
+        title: `Digest: ${this.pendingDigest.length} auto-approved proposals`,
         description: digestLines.join('\n'),
         proposalId: 'digest',
       }).catch(() => {});
-      console.log(`  📧 Digest email sent: ${pendingDigest.length} proposals`);
-      pendingDigest.length = 0;
+      console.log(`  📧 Digest email sent: ${this.pendingDigest.length} proposals`);
+      this.pendingDigest.length = 0;
     }
 
     const totalFitness = alive.reduce((s, a) => s + a.fitness, 0);

@@ -148,19 +148,21 @@ User decided to sandbox `shell_test` rather than drop it.
   - **HMAC**: include a signed token in the proposal email body, verify on parse.
   - **Retire email**: rely on the dashboard's auth (which landed recently) for human-in-the-loop approval.
 
-### PR-7: performance & polish
+### PR-7: performance & polish — partial
 
-- D1 — cache event-log tail (last hash + count in memory).
-- D2 — atomic `appendJSONL` (write-then-rename, or `O_APPEND|O_SYNC`).
-- D3 — async `execFile` in verification.
-- D4 — cache `listBounties('open')` once per cycle.
-- D5 — extract elimination/reproduction constants to a config table.
-- D6 — replace `parseDecision` ad-hoc validation with a Zod schema.
-- C5 — persist `scheduler.currentCycle` to disk.
-- C6 — persist `agentLastProposal` to disk; move `pendingDigest` to instance state.
-- E1 — rewrite README to match reality.
+Done in this branch:
+- ✅ D1 — `EventLog` now caches `{ hash, count }` of the chain tail. Hydrated lazily, updated in place on every append. `append()` is now O(1) instead of O(N) (was re-reading the entire JSONL file every call).
+- ✅ C6 — `agentLastProposal` and `pendingDigest` moved off module scope onto `Supervisor` instance fields. Threaded through `decideForAgent` as parameters. (Persistence to disk deferred — current behavior is "in-memory, resets on restart" with the trade-off that a chatty agent could double-propose right after a restart.)
+- ✅ E1 — README rewritten to match the live architecture (single supervisor process, treasury, two-tier bounty review, sandboxed shell_test).
 
-Estimated effort: 1 day, parallelizable. Risk: low.
+Deferred to a follow-up:
+- ⏭ D2 — atomic `appendJSONL` (low frequency, low risk).
+- ⏭ D3 — async `execFile` in verification (negligible perf gain at current cycle frequency).
+- ⏭ D4 — cache `listBounties('open')` once per cycle.
+- ⏭ D5 — extract elimination/reproduction constants to a config table.
+- ⏭ D6 — replace `parseDecision` ad-hoc validation with a Zod schema.
+- ⏭ C5 — persist `scheduler.currentCycle` to disk.
+- ⏭ C10 — fix `tests/unit/dashboard-server.test.ts` (31 failures from auth-without-test-headers); requires walking through the auth scheme and adding token headers everywhere.
 
 ## Sequencing
 
