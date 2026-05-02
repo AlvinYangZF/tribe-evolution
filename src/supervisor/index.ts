@@ -67,6 +67,11 @@ function evaluateProposal(proposal: { title: string; description: string; agentI
  * Handles LLM call, token deduction from agent.tokenBalance, scoring, and proposal creation.
  * Designed to be called in parallel via Promise.allSettled.
  */
+interface CycleSnapshot {
+  openBounties: number;
+  topBountyReward: number;
+}
+
 async function decideForAgent(
   agent: AgentState,
   cycleNum: number,
@@ -77,6 +82,7 @@ async function decideForAgent(
   saveAgent: (a: AgentState) => Promise<void>,
   agentLastProposal: Map<string, number>,
   pendingDigest: DigestEntry[],
+  snapshot: CycleSnapshot,
 ): Promise<void> {
   agent.age += 1;
   const g = agent.genome;
@@ -108,8 +114,8 @@ async function decideForAgent(
       aliveCount,
       pendingMessages: 0,
       availableResources: 0,
-      openBounties: await (async () => { try { const b = await bountyBoard.listBounties('open'); return b.length; } catch { return 0; } })(),
-      topBountyReward: await (async () => { try { const o = await bountyBoard.listBounties('open'); return o.length > 0 ? Math.max(...o.map(b => b.reward)) : 0; } catch { return 0; } })(),
+      openBounties: snapshot.openBounties,
+      topBountyReward: snapshot.topBountyReward,
     }, llmCall);
 
     // Deduct tokens from agent balance (was previously in a detached module-level Map)
@@ -289,9 +295,18 @@ export class Supervisor extends EventEmitter {
         },
       },
     );
+    // Cycle counter is persisted at ecosystem/scheduler-state.json so
+    // generation numbers tagged on offspring stay monotonic across restarts
+    // (otherwise gen=0 keeps recurring every time the supervisor boots).
     this.scheduler = new Scheduler({ cycleIntervalMs: config.cycleIntervalMs });
     this.scheduler.on('cycleStart', (n: number) => this.emit('cycleStart', n));
-    this.scheduler.on('cycleEnd', (n: number) => this.emit('cycleEnd', n));
+    this.scheduler.on('cycleEnd', async (n: number) => {
+      this.emit('cycleEnd', n);
+      await safeWriteJSON(
+        path.join(this.config.ecosystemDir, 'scheduler-state.json'),
+        { lastCycle: n },
+      );
+    });
   }
 
   /** Build the NotifyConfig from the main Config. */
@@ -326,6 +341,18 @@ export class Supervisor extends EventEmitter {
       const pending = await this.proposalManager.getPendingProposals();
       for (const p of pending) this.seenProposalIds.add(p.id);
     } catch { /* proposal log may be missing on first run */ }
+
+    // Resume the scheduler cycle counter from persisted state so offspring
+    // generation numbers stay monotonic across restarts.
+    try {
+      const persisted = JSON.parse(
+        await fs.readFile(path.join(this.config.ecosystemDir, 'scheduler-state.json'), 'utf-8'),
+      ) as { lastCycle?: number };
+      if (typeof persisted.lastCycle === 'number') {
+        // lastCycle is the most recently completed cycle; resume at lastCycle + 1
+        this.scheduler.setStartingCycle(persisted.lastCycle + 1);
+      }
+    } catch { /* no persisted state on first run */ }
 
     await this.eventLog.append({ type: 'agent_born', agentId: 'supervisor', data: { action: 'start', agentCount: this.agents.size } });
     console.log(`✅ ${this.agents.size} agents loaded, starting cycles...`);
@@ -377,6 +404,17 @@ export class Supervisor extends EventEmitter {
 
     const alive = [...this.agents.values()].filter(a => a.alive);
 
+    // Snapshot ecosystem-wide signals once per cycle so we don't re-read the
+    // bounties file for every agent's prompt assembly.
+    let snapshot: CycleSnapshot = { openBounties: 0, topBountyReward: 0 };
+    try {
+      const open = await this.bountyBoard.listBounties('open');
+      snapshot = {
+        openBounties: open.length,
+        topBountyReward: open.length > 0 ? Math.max(...open.map(b => b.reward)) : 0,
+      };
+    } catch { /* bounties file may not exist on first run */ }
+
     // LLM-powered decisions for each agent (parallel)
     const results = await Promise.allSettled(
       alive.map(agent =>
@@ -390,6 +428,7 @@ export class Supervisor extends EventEmitter {
           this.saveAgent.bind(this),
           this.agentLastProposal,
           this.pendingDigest,
+          snapshot,
         )
       )
     );

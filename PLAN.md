@@ -176,12 +176,18 @@ Done in this branch:
 - ✅ E1 — README rewritten to match the live architecture (single supervisor process, treasury, two-tier bounty review, sandboxed shell_test).
 
 Deferred to a follow-up:
-- ⏭ D2 — atomic `appendJSONL` (low frequency, low risk).
+- ⏭ D2 — atomic `appendJSONL` (low frequency, low risk; defensive only).
 - ⏭ D3 — async `execFile` in verification (negligible perf gain at current cycle frequency).
-- ⏭ D4 — cache `listBounties('open')` once per cycle.
-- ⏭ D5 — extract elimination/reproduction constants to a config table.
-- ⏭ D6 — replace `parseDecision` ad-hoc validation with a Zod schema.
-- ⏭ C5 — persist `scheduler.currentCycle` to disk.
+- ✅ D4 — done in PR-11.
+- ⏭ D5 — extract elimination/reproduction constants to a config table (style only).
+- ✅ D6 — done in PR-11.
+- ✅ C5 — done in PR-11.
+
+### PR-11: code-quality batch — ✅ DONE (D4, D6, C5)
+
+- ✅ D4 — `Supervisor.runCycle` now reads `bountyBoard.listBounties('open')` exactly once per cycle and threads the snapshot (`{ openBounties, topBountyReward }`) into `decideForAgent`. Was two file reads per agent per cycle (40+ at maxAgents=20).
+- ✅ D6 — `parseDecision` now uses a Zod schema (`DecisionSchema`) instead of hand-rolled type checks. The action enum is derived from `ALL_DECISION_ACTIONS` so adding a new action only requires updating one place. Project already depends on `zod` (used by `email-checker.ts`).
+- ✅ C5 — `Scheduler` learned `setStartingCycle(n)` and a `startingCycle` constructor option. Supervisor persists the cycle counter to `ecosystem/scheduler-state.json` on every `cycleEnd` and resumes from `lastCycle + 1` at `start()` time. Offspring `generation` numbers stay monotonic across restarts. Three new scheduler unit tests cover constructor option, runtime setter, and the "must not call after running" guard.
 - ✅ C10 — done in PR-8.
 
 ### PR-8: dashboard test auth + two server bugs revealed by C10 — ✅ DONE

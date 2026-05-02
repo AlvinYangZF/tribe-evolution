@@ -6,6 +6,7 @@
  * for an LLM, then parses the LLM's JSON decision.
  */
 
+import { z } from 'zod/v4';
 import type { Genome, SkillName } from '../shared/types.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -174,6 +175,12 @@ const IDLE_DECISION: AgentDecision = {
   reasoning: 'LLM returned invalid response',
 };
 
+const DecisionSchema = z.object({
+  action: z.enum(ALL_DECISION_ACTIONS as [DecisionAction, ...DecisionAction[]]),
+  params: z.looseObject({}),
+  reasoning: z.string().optional(),
+});
+
 /**
  * Parse the LLM's JSON response into a structured AgentDecision.
  * Falls back to idle on any parse failure or invalid action type.
@@ -183,37 +190,33 @@ export function parseDecision(llmResponse: string): AgentDecision {
     return { ...IDLE_DECISION };
   }
 
-  let parsed: Record<string, unknown>;
+  let raw: unknown;
   try {
-    parsed = JSON.parse(llmResponse.trim()) as Record<string, unknown>;
+    raw = JSON.parse(llmResponse.trim());
   } catch {
     return { ...IDLE_DECISION };
   }
 
-  const { action, params, reasoning } = parsed;
-
-  if (typeof action !== 'string' || !ALL_DECISION_ACTIONS.includes(action as DecisionAction)) {
-    return { ...IDLE_DECISION };
+  const parsed = DecisionSchema.safeParse(raw);
+  if (!parsed.success) {
+    return { ...IDLE_DECISION, reasoning: `LLM response did not match schema: ${parsed.error.message.slice(0, 80)}` };
   }
 
-  // Validate params: must be a non-null, non-array object
-  if (typeof params !== 'object' || params === null || Array.isArray(params)) {
-    return { ...IDLE_DECISION, reasoning: 'LLM response had invalid params (not an object)' };
-  }
+  const { action, params, reasoning } = parsed.data;
 
   // For 'propose' action, require at least title or description
   if (action === 'propose') {
-    const hasTitle = typeof (params as Record<string, unknown>).title === 'string' && ((params as Record<string, unknown>).title as string).trim().length > 0;
-    const hasDescription = typeof (params as Record<string, unknown>).description === 'string' && ((params as Record<string, unknown>).description as string).trim().length > 0;
+    const hasTitle = typeof params.title === 'string' && params.title.trim().length > 0;
+    const hasDescription = typeof params.description === 'string' && params.description.trim().length > 0;
     if (!hasTitle && !hasDescription) {
       return { ...IDLE_DECISION, reasoning: 'LLM propose action missing title or description' };
     }
   }
 
   return {
-    action: action as DecisionAction,
+    action,
     params: params as Record<string, unknown>,
-    reasoning: typeof reasoning === 'string' ? reasoning : '',
+    reasoning: reasoning ?? '',
   };
 }
 
