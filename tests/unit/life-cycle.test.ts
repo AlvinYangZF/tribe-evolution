@@ -220,10 +220,10 @@ describe('life-cycle', () => {
 
     it('should produce both male and female offspring across multiple births', () => {
       const agents = [1,2,3,4,5,6].map(i =>
-        makeAgent(`a${i}`, { 
-          protectionRounds: 0, 
-          contributionScore: i * 10, 
-          age: i, 
+        makeAgent(`a${i}`, {
+          protectionRounds: 0,
+          contributionScore: i * 10,
+          age: i,
           reputation: i / 10,
           diploidGenome: makeDiploidGenome(i <= 3 ? 'male' : 'female'),
         })
@@ -235,6 +235,33 @@ describe('life-cycle', () => {
       const femaleCount = genders.filter(g => g === 'female').length;
       expect(maleCount).toBeGreaterThan(0);
       expect(femaleCount).toBeGreaterThan(0);
+    });
+
+    it('should record both parents on sexual offspring', () => {
+      // 3 male + 3 female so sexual reproduction kicks in.
+      const agentIds = ['m1','m2','m3','f1','f2','f3'];
+      const agents = agentIds.map((id, i) =>
+        makeAgent(id, {
+          protectionRounds: 0, contributionScore: 50, age: 1, reputation: 0.5,
+          diploidGenome: makeDiploidGenome(i < 3 ? 'male' : 'female'),
+        })
+      );
+      const ranked = evaluateFitness(agents);
+      const offspring = reproduce(ranked, 5);
+
+      for (const child of offspring) {
+        // primary parent (parentId) is one of the live agents
+        expect(child.parentId).not.toBeNull();
+        expect(agentIds).toContain(child.parentId);
+        // parentIds carries both parents and they're distinct
+        expect(child.parentIds).toBeDefined();
+        expect(child.parentIds!.length).toBe(2);
+        expect(child.parentIds![0]).not.toBe(child.parentIds![1]);
+        // both should be live agent ids
+        for (const pid of child.parentIds!) {
+          expect(agentIds).toContain(pid);
+        }
+      }
     });
   });
 
