@@ -22,6 +22,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WEB_DIR = path.resolve(process.env.WEB_DIR || path.join(__dirname, '..', 'web'));
 const PORT = parseInt(process.env.WEB_PORT || '3001', 10);
 
+const API_BACKEND = process.env.API_BACKEND || 'http://localhost:3000';
+
+
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'application/javascript; charset=utf-8',
