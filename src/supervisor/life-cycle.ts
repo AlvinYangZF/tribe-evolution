@@ -74,15 +74,39 @@ export function evaluateFitness(agents: AgentState[]): RankedAgent[] {
  * Rule: Agents with protectionRounds > 0 are skipped during elimination.
  * If the lowest-fitness agent is protected, move up to the next.
  */
-export function eliminate(
+/**
+ * Graduated stepped elimination — the more agents exceed target, the more aggressive.
+ * < 20 alive: eliminate 0
+ * 20-29: eliminate 2
+ * 30-39: eliminate 5  
+ * 40-49: eliminate 10
+ * 50-59: eliminate 20
+ * 60-69: eliminate 40
+ * 70+: eliminate 60
+ * 
+ * Below 30, protected agents (protectionRounds > 0) are skipped.
+ * Above 30, ALL agents participate regardless of protection.
+ */
+export function eliminateStepped(
   ranked: RankedAgent[],
-  rate: number = 0.3,
 ): { survivors: AgentState[]; eliminated: AgentState[] } {
-  const toEliminate = Math.max(1, Math.round(ranked.length * rate));
+  const pop = ranked.length;
+  let toEliminate = 0;
+  if (pop >= 70) toEliminate = 60;
+  else if (pop >= 60) toEliminate = 40;
+  else if (pop >= 50) toEliminate = 20;
+  else if (pop >= 40) toEliminate = 10;
+  else if (pop >= 30) toEliminate = 5;
+  else if (pop >= 20) toEliminate = 2;
+  // < 20: no elimination
+
+  if (toEliminate === 0) {
+    return { survivors: ranked.map(r => r.agent), eliminated: [] };
+  }
+
+  const forceAll = pop >= 30; // above 30, protection doesn't apply
   const eliminated: AgentState[] = [];
   const survivors: AgentState[] = [];
-
-  // Sort ascending by fitness (lowest first) and try to eliminate
   const sortedAsc = [...ranked].sort((a, b) => a.fitness - b.fitness);
 
   for (const entry of sortedAsc) {
@@ -90,18 +114,17 @@ export function eliminate(
       survivors.push(entry.agent);
       continue;
     }
-
-    if (entry.agent.protectionRounds > 0) {
-      // Protected — skip elimination, add to survivors
+    if (!forceAll && entry.agent.protectionRounds > 0) {
       survivors.push(entry.agent);
     } else {
       eliminated.push({ ...entry.agent, alive: false });
     }
   }
 
-  // Any remaining agents that weren't iterated go to survivors
   return { survivors, eliminated };
 }
+
+/** @deprecated — use eliminateStepped instead */
 
 /**
  * Check if an agent can reproduce.
@@ -295,35 +318,17 @@ export function runCycle(agents: AgentState[], cycleNumber: number, maxAgents: n
     alive: false,
   }));
 
-  // Step 2: Eliminate among alive agents only
-  let { survivors, eliminated } = eliminate(aliveRanked, 0.3);
+  // Step 2: Graduated stepped elimination
+  let { survivors, eliminated } = eliminateStepped(aliveRanked);
   eliminated.push(...deadOfAge);
 
-  // Enforce max population cap — eliminate lowest fitness beyond max
-  const sortedSurvivors = [...survivors].sort((a, b) => {
-    const fa = ranked.find(r => r.agent.id === a.id)?.fitness ?? 0;
-    const fb = ranked.find(r => r.agent.id === b.id)?.fitness ?? 0;
-    return fb - fa;
-  });
-  while (sortedSurvivors.length > maxAgents) {
-    const removed = sortedSurvivors.pop()!;
-    removed.alive = false;
-    eliminated.push(removed);
-  }
-  survivors = sortedSurvivors;
-
-  // Only reproduce enough to fill slots
-  const slots = Math.max(0, maxAgents - survivors.length);
-  const eliminatedCount = Math.min(eliminated.length, slots);
-
-  // Step 3: Reproduce (sexual reproduction with gender pairing)
-  const offspring =
-    eliminatedCount > 0
-      ? reproduce(
-          ranked.filter(r => survivors.some(s => s.id === r.agent.id)),
-          eliminatedCount,
-        )
-      : [];
+  // Reproduction: only if below 30
+  const offspring = survivors.length < 30
+    ? reproduce(
+        ranked.filter(r => survivors.some(s => s.id === r.agent.id)),
+        Math.min(5, 30 - survivors.length),
+      )
+    : [];
 
   // Step 4: Update ages and protections for survivors
   const updatedSurvivors = survivors.map((agent) => ({
