@@ -59,6 +59,7 @@ findings into themed PRs sized for independent review and merge.
 | C8 🆕 | `life-cycle.ts:333-338` | `runCycle` increments age after `eliminateStepped` but never re-marks agents who cross age 50 as dead — a survivor can come back alive at age 50 |
 | C9 🆕 | `tests/unit/bounty-board.test.ts` | 3 tests expect the pre-rename `verifying` status (replaced by `submitted` in two-tier review). Pre-existing on `main`. Belongs in PR-2 |
 | C10 🆕 | `tests/unit/dashboard-server.test.ts` | 31 tests fail with 401 because the dashboard auth landed without test-side auth headers. Pre-existing on `main`. Belongs in PR-7 |
+| C11 🆕 | `bounty-board.ts` ↔ `supervisor/index.ts` | `BountyBoard.deductAgentTokens`/`addAgentTokens` write directly to agent JSON, bypassing the supervisor's in-memory `this.agents` map. If a bounty action mutates an agent during a cycle, the supervisor's in-memory copy can overwrite it at end-of-cycle `saveAgent` time. Mitigated by `loadAgents()` at the start of every cycle. Belongs in a follow-up to PR-3 (token-mutation unification) |
 
 ### D. Performance / hygiene
 
@@ -104,14 +105,17 @@ Fixes A5, A6, C9.
 
 Result: 213/213 non-dashboard tests pass. C9 cleared.
 
-### PR-3: token-economy invariants
+### PR-3: token-economy invariants — ✅ DONE (partial)
 
-- A3 + A7 — make escrow real: either debit the creator or introduce a "treasury" account. **Open question for the user.**
-- C1 — honor the `maxAgents` parameter.
-- C2 — track proposal "seen" by ID set, not by count.
-- Unify all token mutations through a single `Supervisor.adjustBalance(agentId, delta)` so the bounty board and the cycle loop don't race on agent JSON files.
+User decided escrow is funded by a system treasury (not by debiting the creator).
 
-Estimated effort: 1 day. Risk: medium (changes economic balance).
+- ✅ A3 — new `Treasury` class (`supervisor/treasury.ts`), JSON-backed at `ecosystem/treasury.json`. `BountyBoard.awardBid` now debits the treasury by `bounty.reward`; on exhausted retries, `failVerification` refunds the reservation. Initial balance is `1_000_000_000` (revisit via config in PR-7).
+- ✅ A7 — auto-approved proposal rewards now debit the treasury too. If the treasury can't fund a proposal, the supervisor flips it to a rejection rather than minting silently.
+- ✅ C1 — `runCycle` uses the `maxAgents` parameter for both the reproduction gate and the offspring-count cap.
+- ✅ C2 — `scanProposals` walks all pending proposals and notifies on first sight via a `seenProposalIds: Set<string>` field. Hydrated at `Supervisor.start()` from the existing pending log so a restart doesn't re-spam.
+- ⏭ Deferred to PR-3.5 (or PR-5): unify all token mutations through a single `Supervisor.adjustBalance(agentId, delta)`. Today, `BountyBoard.deductAgentTokens`/`addAgentTokens` bypass the supervisor's in-memory `this.agents` map; if a bounty action runs before `runLifeCycle`, the in-memory copy can stomp the on-disk update at `saveAgent` time. Mitigated in practice by `loadAgents()` at the start of every cycle, but it's a real coupling bug. (New tracker: **C11**.)
+
+Result: 221/221 non-dashboard tests pass. Added 6 Treasury tests + 2 escrow flow tests.
 
 ### PR-4: agent path consolidation
 

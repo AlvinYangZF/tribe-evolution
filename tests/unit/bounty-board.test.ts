@@ -669,4 +669,91 @@ describe('BountyBoard', () => {
     expect(bounty.verificationTests).toHaveLength(2);
     expect(bounty.verifierAgentId).toBe('verifier_1');
   });
+
+  // ─── Treasury-funded escrow ────────────────────────────────────────────
+
+  it('should debit the treasury at award time and credit the winner at completion', async () => {
+    const creator = makeAgent('creator_t', 10000);
+    const winner = makeAgent('winner_t', 5000);
+    await writeAgent(tempDir, creator);
+    await writeAgent(tempDir, winner);
+
+    const treasury = board.getTreasury();
+    const before = await treasury.getState();
+
+    const bounty = await board.createBounty({
+      title: 'Treasury test',
+      description: 'Desc',
+      creatorId: 'creator_t',
+      type: 'bug_fix',
+      reward: 1000,
+      deadline: Date.now() + 86400000,
+      depositRate: 0.5,
+    });
+    const bid = await board.placeBid(bounty.id, 'winner_t', 800, 'Plan');
+    await board.awardBid(bounty.id, bid.id);
+
+    // Award debits the treasury by the reward amount.
+    const afterAward = await treasury.getState();
+    expect(afterAward.balance).toBe(before.balance - 1000);
+    expect(afterAward.totalIssued).toBe(before.totalIssued + 1000);
+
+    await board.submitResult(bounty.id, 'winner_t', 'http://a', 'Done');
+    await board.publisherApprove(bounty.id);
+    await board.supervisorApprove(bounty.id);
+    await board.completeBounty(bounty.id);
+
+    // Treasury balance is unchanged at completion (the reservation was made
+    // at award time); the winner's tokenBalance reflects the payout.
+    const afterComplete = await treasury.getState();
+    expect(afterComplete.balance).toBe(afterAward.balance);
+
+    const finalWinner = await readAgent(tempDir, 'winner_t');
+    // 5000 - 500 (deposit) + 1000 (escrow released) = 5500
+    expect(finalWinner!.tokenBalance).toBe(5500);
+  });
+
+  it('should refund the treasury when a bounty exhausts its retries', async () => {
+    const creator = makeAgent('creator_r', 10000);
+    const winner = makeAgent('winner_r', 5000);
+    await writeAgent(tempDir, creator);
+    await writeAgent(tempDir, winner);
+
+    const treasury = board.getTreasury();
+    const before = await treasury.getState();
+
+    const bounty = await board.createBounty({
+      title: 'Refund test',
+      description: 'Desc',
+      creatorId: 'creator_r',
+      type: 'research',
+      reward: 1000,
+      deadline: Date.now() + 86400000,
+      depositRate: 0.5,
+      maxRetries: 1,
+      verificationTests: [{ type: 'file_check', description: 'Check', filePath: '/nonexistent/file', expectedContent: 'data' }],
+    });
+    const bid = await board.placeBid(bounty.id, 'winner_r', 800, 'Plan');
+    await board.awardBid(bounty.id, bid.id);
+
+    const afterAward = await treasury.getState();
+    expect(afterAward.balance).toBe(before.balance - 1000);
+
+    // Round 1: submit, fail → retry
+    await board.submitResult(bounty.id, 'winner_r', 'http://a1', 'r1');
+    await board.failVerification(bounty.id);
+
+    // Round 2: submit, fail → exhausted, bounty re-opens
+    await board.submitResult(bounty.id, 'winner_r', 'http://a2', 'r2');
+    await board.failVerification(bounty.id);
+
+    const finalState = (await board.listBounties())[0];
+    expect(finalState.status).toBe('open');
+    expect(finalState.escrowFrozen).toBe(0);
+
+    // Treasury should be back to its pre-award balance.
+    const afterRefund = await treasury.getState();
+    expect(afterRefund.balance).toBe(before.balance);
+    expect(afterRefund.totalRefunded).toBe(before.totalRefunded + 1000);
+  });
 });

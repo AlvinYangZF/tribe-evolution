@@ -13,6 +13,7 @@ import type { Config } from '../config/index.js';
 import { checkEmailReplies as checkPop3, type EmailReply } from './email-checker.js';
 import { ensureDir, safeWriteJSON } from '../shared/filesystem.js';
 import { BountyBoard } from './bounty-board.js';
+import { Treasury } from './treasury.js';
 import type { AgentState, SkillName } from '../shared/types.js';
 
 const ALL_SKILL_NAMES: SkillName[] = ['web_search', 'code_write', 'data_analyze', 'artifact_write', 'observe', 'propose'];
@@ -252,8 +253,20 @@ async function decideForAgent(
         // Auto-evaluate: Supervisor decides approve/reject/escalate
         const evaluation = evaluateProposal(proposal, agent);
         if (evaluation.action === 'approve') {
+          // Treasury funds the proposal reward — no minting from thin air.
+          // If the treasury can't cover it, flip to a rejection rather than
+          // silently failing.
+          try {
+            await bountyBoard.getTreasury().debit(proposal.tokenReward);
+          } catch (err: unknown) {
+            const m = err instanceof Error ? err.message : String(err);
+            await proposalManager.rejectProposal(proposal.id, `Treasury cannot fund: ${m}`, 'supervisor');
+            console.log(`  ❌ Auto-rejected (treasury): ${proposal.id}`);
+            return;
+          }
           await proposalManager.approveProposal(proposal.id, 'supervisor');
           agent.tokenBalance += proposal.tokenReward;
+          await saveAgent(agent);
           console.log(`  ✅ Auto-approved: ${proposal.id}`);
           pendingDigest.push(proposal);
         } else if (evaluation.action === 'reject') {
@@ -288,7 +301,7 @@ export class Supervisor extends EventEmitter {
   private scheduler: Scheduler;
   private proposalManager: ProposalManager;
   private bountyBoard: BountyBoard;
-  private lastProposalCount = 0;
+  private seenProposalIds: Set<string> = new Set();
   private started = false;
   private agents: Map<string, AgentState> = new Map();
   private dashboard: { broadcast: () => Promise<void> } | null = null;
@@ -328,6 +341,13 @@ export class Supervisor extends EventEmitter {
     } catch (err: unknown) {
       console.warn(`Dashboard unavailable: ${err instanceof Error ? err.message : String(err)}`);
     }
+
+    // Seed seenProposalIds with whatever's already pending so a restart
+    // doesn't re-notify (or re-process) every existing pending proposal.
+    try {
+      const pending = await this.proposalManager.getPendingProposals();
+      for (const p of pending) this.seenProposalIds.add(p.id);
+    } catch { /* proposal log may be missing on first run */ }
 
     await this.eventLog.append({ type: 'agent_born', agentId: 'supervisor', data: { action: 'start', agentCount: this.agents.size } });
     console.log(`✅ ${this.agents.size} agents loaded, starting cycles...`);
@@ -499,15 +519,17 @@ export class Supervisor extends EventEmitter {
   private async scanProposals(): Promise<void> {
     const nc = this.getNotifyConfig();
     try {
+      // Walk all currently-pending proposals; notify only the ones we haven't
+      // seen before. Tracking by ID set is robust to count fluctuations as
+      // proposals get auto-approved or auto-rejected mid-cycle.
       const pending = await this.proposalManager.getPendingProposals();
-      if (pending.length > this.lastProposalCount) {
-        for (const p of pending.slice(this.lastProposalCount)) {
-          console.log(`  📩 Proposal from ${p.agentId}: "${p.title}"`);
-          await this.eventLog.append({ type: 'proposal_created', agentId: p.agentId, data: { proposalId: p.id, title: p.title } });
-          notifyUser(nc, { agentId: p.agentId, type: p.type, title: p.title, description: p.description, tokenCost: p.tokenCost, proposalId: p.id }).catch(() => {});
-        }
+      for (const p of pending) {
+        if (this.seenProposalIds.has(p.id)) continue;
+        this.seenProposalIds.add(p.id);
+        console.log(`  📩 Proposal from ${p.agentId}: "${p.title}"`);
+        await this.eventLog.append({ type: 'proposal_created', agentId: p.agentId, data: { proposalId: p.id, title: p.title } });
+        notifyUser(nc, { agentId: p.agentId, type: p.type, title: p.title, description: p.description, tokenCost: p.tokenCost, proposalId: p.id }).catch(() => {});
       }
-      this.lastProposalCount = pending.length;
       const expired = await this.proposalManager.expireOldProposals();
       if (expired > 0) console.log(`  🧹 Expired ${expired} stale proposals`);
     } catch (err: unknown) {

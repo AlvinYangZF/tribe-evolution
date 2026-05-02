@@ -322,11 +322,11 @@ export function runCycle(agents: AgentState[], cycleNumber: number, maxAgents: n
   let { survivors, eliminated } = eliminateStepped(aliveRanked);
   eliminated.push(...deadOfAge);
 
-  // Reproduction: only if below 30
-  const offspring = survivors.length < 30
+  // Reproduction: only when survivors are below the population cap.
+  const offspring = survivors.length < maxAgents
     ? reproduce(
         ranked.filter(r => survivors.some(s => s.id === r.agent.id)),
-        Math.min(5, 30 - survivors.length),
+        Math.min(5, maxAgents - survivors.length),
       )
     : [];
 

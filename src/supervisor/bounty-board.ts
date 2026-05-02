@@ -16,6 +16,7 @@ import { randomUUID } from 'node:crypto';
 import { execSync } from 'node:child_process';
 import * as fs from 'node:fs/promises';
 import { safeReadJSON, safeWriteJSON, ensureDir } from '../shared/filesystem.js';
+import { Treasury } from './treasury.js';
 import type {
   Bounty, BountyStatus, BountyType, Bid,
   VerificationTest, AgentState,
@@ -51,10 +52,16 @@ function assertTransition(from: BountyStatus, to: BountyStatus): void {
 export class BountyBoard {
   private bountiesFilePath: string;
   private agentsDir: string;
+  private treasury: Treasury;
 
-  constructor(private ecosystemDir: string) {
+  constructor(private ecosystemDir: string, treasury?: Treasury) {
     this.bountiesFilePath = path.join(ecosystemDir, BOUNTIES_DIR, BOUNTIES_FILE);
     this.agentsDir = path.join(ecosystemDir, AGENTS_DIR);
+    this.treasury = treasury ?? new Treasury(ecosystemDir);
+  }
+
+  getTreasury(): Treasury {
+    return this.treasury;
   }
 
   // ─── Persistence helpers ──────────────────────────────────────────────
@@ -226,8 +233,11 @@ export class BountyBoard {
       }
     }
 
-    // Freeze the reward as escrow (deduct from creator)
-    // Note: we track escrowFrozen but don't deduct creator balance — it's virtual holding
+    // Treasury funds the bounty escrow at award time. The reward is reserved
+    // out of the system treasury now so winner credit at completion time is
+    // backed by a real token movement (no minting).
+    await this.treasury.debit(bounty.reward);
+
     const updated: Bounty = {
       ...bounty,
       status: 'awarded',
@@ -419,6 +429,12 @@ export class BountyBoard {
         } catch {
           // Agent may have insufficient balance; skip penalty
         }
+      }
+
+      // The bounty failed for good — refund the escrow to the treasury so
+      // the reservation is released (the bounty can be re-awarded later).
+      if (bounty.escrowFrozen > 0) {
+        await this.treasury.refund(bounty.escrowFrozen);
       }
 
       const updated: Bounty = {
