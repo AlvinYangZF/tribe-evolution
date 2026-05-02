@@ -46,6 +46,32 @@ const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
     let pathname = decodeURIComponent(url.pathname);
+
+    // Proxy API calls to agent backend
+    if (pathname.startsWith('/api/') || pathname === '/auth-check' || pathname === '/login') {
+      try {
+        const proxyUrl = API_BACKEND + req.url;
+        let body: string | undefined;
+        if (req.method === 'POST' || req.method === 'PUT') {
+          body = await new Promise(resolve => {
+            let d = ''; req.on('data', c => d += c); req.on('end', () => resolve(d));
+          });
+        }
+        const headers: Record<string, string> = {};
+        if (body) headers['Content-Type'] = req.headers['content-type'] || 'application/json';
+        if (req.headers['cookie']) headers['Cookie'] = req.headers['cookie'];
+        if (req.headers['x-auth-token']) headers['X-Auth-Token'] = req.headers['x-auth-token'];
+        const proxyRes = await fetch(proxyUrl, { method: req.method || 'GET', headers, body });
+        const data = Buffer.from(await proxyRes.arrayBuffer());
+        res.writeHead(proxyRes.status || 200, { 'Content-Type': proxyRes.headers.get('content-type') || 'application/json', 'Access-Control-Allow-Origin': '*' });
+        res.end(data);
+      } catch(e) {
+        res.writeHead(502, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Backend unavailable' }));
+      }
+      return;
+    }
+
     if (pathname.endsWith('/')) pathname += 'index.html';
 
     const filePath = path.resolve(path.join(WEB_DIR, pathname));
