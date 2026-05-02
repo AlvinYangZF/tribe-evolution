@@ -98,7 +98,7 @@ function recordSuccess(ip: any) { loginAttempts.delete(ip); }
 const AUTH_TOKEN = process.env.DASHBOARD_AUTH_TOKEN || 'tribe-admin';
 function authMiddleware(req: any, res: any, next: any) {
   // Allow public access to login page
-  if (req.url === '/login' || req.url === '/login.html' || req.url?.startsWith('/static/')) {
+  if (req.url === '/login' || req.url === '/auth-check' || req.url?.startsWith('/static/')) {
     return next();
   }
   const token = req.headers['x-auth-token'] || 
@@ -350,6 +350,36 @@ const agentsDir = path.join(ecosystemDir, 'agents');
 
     const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
     const pathname = url.pathname;
+
+    // Auth check endpoint
+    if (pathname === '/auth-check' && req.method === 'POST') {
+      let body = '';
+      req.on('data', c => body += c);
+      req.on('end', () => {
+        try {
+          const { token } = JSON.parse(body);
+          const ip = req.socket?.remoteAddress || 'unknown';
+          const limit = checkRateLimit(ip);
+          if (!limit.allowed) {
+            res.writeHead(429, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Rate limited', waitSeconds: limit.waitSeconds }));
+            return;
+          }
+          if (token === AUTH_TOKEN) {
+            recordSuccess(ip);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ ok: true }));
+          } else {
+            const entry = recordFailure(ip);
+            res.writeHead(401, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Invalid password', attempts: entry.count, lockedUntil: entry.lockedUntil }));
+          }
+        } catch(e) { res.writeHead(400); res.end(); }
+      });
+      return;
+    }
+
+
 
     // ── Bounties file path ──
     const bountiesPath = path.join(ecosystemDir, 'bounties', 'bounties.json');
