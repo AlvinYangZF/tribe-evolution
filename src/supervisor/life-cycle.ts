@@ -214,7 +214,11 @@ export function reproduce(ranked: RankedAgent[], count: number): AgentState[] {
       genome,
       diploidGenome: mutatedDiploid,
       generation: 0, // Will be set by caller (runCycle)
-      parentId: null,
+      // Record both parents so the dashboard can render a real lineage.
+      // parentId is the primary (mother) for the legacy single-parent view;
+      // parentIds is the full pair for sexual reproduction.
+      parentId: femaleParent.id,
+      parentIds: [femaleParent.id, maleParent.id],
       tokenBalance: 100,
       contributionScore: 0,
       reputation: 0.5,
@@ -269,7 +273,8 @@ function reproduceAsexual(ranked: RankedAgent[], count: number): AgentState[] {
       genome,
       diploidGenome: childDiploid,
       generation: 0,
-      parentId: null,
+      parentId: parent.id,
+      parentIds: [parent.id],
       tokenBalance: 100,
       contributionScore: 0,
       reputation: 0.5,
