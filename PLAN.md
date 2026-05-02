@@ -117,13 +117,16 @@ User decided escrow is funded by a system treasury (not by debiting the creator)
 
 Result: 221/221 non-dashboard tests pass. Added 6 Treasury tests + 2 escrow flow tests.
 
-### PR-4: agent path consolidation
+### PR-4: agent path consolidation — ✅ DONE
 
-- B1 — pick in-process or subprocess; delete the loser.
-  - Default proposal: keep in-process, delete `src/agent/index.ts` and `src/agent/llm-proxy.ts`.
-- **Open question for the user:** is the JSON-RPC agent shell reserved for a remote-spawn plan?
+User decided to keep both deployment shells (in-process supervisor and JSON-RPC subprocess). The work shifted from "delete the loser" to "stop the two paths from drifting".
 
-Estimated effort: half a day if we delete. Risk: low.
+- ✅ Extracted `proxyCall` into `src/shared/llm.ts`. Both the supervisor's `decideForAgent` and the subprocess's `callLLMLocal` now go through it, so timeout (30s), retry behavior, and `tokenUsage`/`cost` reporting stay in sync.
+- ✅ Deleted `src/supervisor/llm-proxy.ts`. Updated imports in `supervisor/index.ts` and `tests/unit/llm-proxy.test.ts`.
+- ✅ Replaced the hand-rolled `fetch` in `agent/index.ts:callLLMLocal` with `proxyCall`. Subprocess passes a stable agent label (`subprocess-${personaName}`) so telemetry can distinguish the two paths.
+- ⏭ Out of scope for PR-4: making the subprocess load `AgentState` from disk via `AGENT_ID` env (today it always starts with a fresh random genome). Tracked separately if the subprocess deployment ever needs persistence.
+
+Result: 221/221 non-dashboard tests pass. `agent/llm-proxy.ts` (the genome→prompt helper, distinct from the LLM client) is left in place.
 
 ### PR-5: genome model
 

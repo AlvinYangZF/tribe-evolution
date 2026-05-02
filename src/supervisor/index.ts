@@ -7,7 +7,7 @@ import { ProposalManager } from './proposal.js';
 import { runCycle as runLifeCycle } from './life-cycle.js';
 import { notifyUser, type NotifyConfig } from './notify.js';
 import { decide } from '../agent/brain.js';
-import { proxyCall } from './llm-proxy.js';
+import { proxyCall } from '../shared/llm.js';
 import { genomeToSystemPrompt, expressGenome, expressedToGenome } from '../agent/genome.js';
 import type { Config } from '../config/index.js';
 import { checkEmailReplies as checkPop3, type EmailReply } from './email-checker.js';

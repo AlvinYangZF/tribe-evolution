@@ -13,49 +13,31 @@ import { createRandomGenome } from './genome.js';
 import { decide } from './brain.js';
 import type { AgentDecision, AgentEnvironmentForBrain, AgentStateForBrain } from './brain.js';
 import type { Genome } from '../shared/types.js';
+import { proxyCall } from '../shared/llm.js';
 import { ProposalManager } from '../supervisor/proposal.js';
 import * as readline from 'node:readline';
 
 // ─── Local LLM call ─────────────────────────────────────────────────────────
 
-const DEEPSEEK_API_URL = 'https://api.deepseek.com/chat/completions';
-
 /**
- * Call the DeepSeek API with a system prompt + user message.
- * This allows the agent subprocess to make independent LLM calls
- * without importing from the supervisor module.
+ * Call the DeepSeek API via the shared LLM client. The agent subprocess uses
+ * the same proxyCall as the in-process supervisor path so retry, timeout, and
+ * tokenUsage accounting stay in sync. This subprocess only consumes the
+ * `content` field; tokenUsage is reported but not acted on (the subprocess
+ * has no view of the agent's on-disk balance).
  */
-async function callLLMLocal(systemPrompt: string, userMessage: string): Promise<string> {
-  const apiKey = process.env.DEEPSEEK_API_KEY;
-  if (!apiKey) {
-    throw new Error('DEEPSEEK_API_KEY not configured');
-  }
-
-  const response = await fetch(DEEPSEEK_API_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: 'deepseek-chat',
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userMessage },
-      ],
-      max_tokens: 500,
-    }),
+async function callLLMLocal(systemPrompt: string, userMessage: string, agentId: string): Promise<string> {
+  const resp = await proxyCall({
+    requestId: `${agentId}-${Date.now()}`,
+    agentId,
+    model: 'deepseek-chat',
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userMessage },
+    ],
+    maxTokens: 500,
   });
-
-  if (!response.ok) {
-    throw new Error(`LLM API error: ${response.status}`);
-  }
-
-  const data = await response.json() as {
-    choices: Array<{ message: { content: string } }>;
-  };
-
-  return data.choices[0]?.message?.content ?? '';
+  return resp.content;
 }
 
 // ─── JSON-RPC types ─────────────────────────────────────────────────────────
@@ -140,7 +122,9 @@ class AgentProcess {
     };
 
     try {
-      const decision = await decide(this.genome, state, env, callLLMLocal);
+      const agentLabel = `subprocess-${this.genome.personaName}`;
+      const callLLM = (sys: string, user: string) => callLLMLocal(sys, user, agentLabel);
+      const decision = await decide(this.genome, state, env, callLLM);
       return {
         id: request.id,
         result: {
