@@ -685,9 +685,12 @@
   var qsApi = qs.get('api');
   if (qsApi) localStorage.setItem('tribe_api_url', qsApi);
   var apiUrl = (localStorage.getItem('tribe_api_url') || 'http://localhost:3000').replace(/\/$/, '');
+  // On non-localhost (cpolar/proxy), use relative URLs so web-server proxies API calls
+  var isLocal = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+  if (!isLocal) apiUrl = '';
   window.TRIBE_CONFIG = {
     apiUrl: apiUrl,
-    wsUrl: apiUrl.replace(/^http/, 'ws') + '/ws',
+    wsUrl: isLocal ? apiUrl.replace(/^http/, 'ws') + '/ws' : '',
   };
 })();
 if (!sessionStorage.getItem('tribe_token')) { location.href = 'login.html'; }
