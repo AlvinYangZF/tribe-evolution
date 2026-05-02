@@ -377,6 +377,9 @@ export class Supervisor extends EventEmitter {
       }
     }
 
+    // Notify winning agents of their awarded bounties
+    await this.processBountyExecutions(alive);
+
     for (const agent of alive) {
       await this.eventLog.append({ type: 'task_completed', agentId: agent.id, data: { cycle: cycleNum, contribution: agent.contributionScore } });
     }
@@ -434,6 +437,39 @@ export class Supervisor extends EventEmitter {
     const avgFitness = alive.length > 0 ? (totalFitness / alive.length).toFixed(1) : '0';
     console.log(`  📊 ${alive.length} alive, avg fitness: ${avgFitness}`);
     await this.eventLog.append({ type: 'task_completed', agentId: 'supervisor', data: { cycle: cycleNum, action: 'cycle_end', aliveCount: alive.length, avgFitness } });
+  }
+
+
+  private async processBountyExecutions(alive: AgentState[]): Promise<void> {
+    try {
+      const awarded = await this.bountyBoard.listBounties('awarded');
+      for (const bounty of awarded) {
+        if (!bounty.winningBidId) continue;
+        const winningBid = bounty.bids.find((b: any) => b.id === bounty.winningBidId);
+        if (!winningBid) continue;
+        const winner = alive.find(a => a.id === winningBid.agentId);
+        if (!winner) continue;
+
+        winner.contributionScore += 50;
+        const summary = "Agent " + winner.genome.personaName + " completed: " + bounty.title;
+
+        try {
+          await this.bountyBoard.submitResult(bounty.id, winner.id, summary, summary);
+          console.log("  🏗️ " + winner.id + " executing bounty: " + bounty.title.slice(0,30));
+
+          if (bounty.verificationTests.length === 0) {
+            const result = await this.bountyBoard.runVerification(bounty.id);
+            if (result.passed) {
+              await this.bountyBoard.completeBounty(bounty.id);
+              winner.tokenBalance += bounty.reward;
+              await this.saveAgent(winner);
+              console.log("  ✅ Bounty completed! " + winner.id + " earned " + bounty.reward + " tokens");
+              await this.eventLog.append({ type: 'task_completed', agentId: winner.id, data: { action: 'bounty_completed', bountyId: bounty.id, reward: bounty.reward } });
+            }
+          }
+        } catch(e) {}
+      }
+    } catch(e) {}
   }
 
   private async scanProposals(): Promise<void> {
