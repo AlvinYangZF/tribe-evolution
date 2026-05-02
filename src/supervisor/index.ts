@@ -12,6 +12,7 @@ import { genomeToSystemPrompt } from '../agent/genome.js';
 import type { Config } from '../config/index.js';
 import { checkEmailReplies as checkPop3, type EmailReply } from './email-checker.js';
 import { ensureDir, safeWriteJSON } from '../shared/filesystem.js';
+import { BountyBoard } from './bounty-board.js';
 import type { AgentState } from '../shared/types.js';
 
 // Proposal cooldown tracker: agent must wait N cycles between proposals
@@ -163,7 +164,8 @@ async function decideForAgent(
     }
 
     let score = 10;
-    if (decision.action === 'web_search') score = 40;
+    if (decision.action === 'bid_bounty') score = 70;
+        else if (decision.action === 'web_search') score = 40;
     else if (decision.action === 'write_artifact') score = 50;
     else if (decision.action === 'propose') score = 60;
     else if (decision.action === 'lock_resource') score = 25;
@@ -232,6 +234,7 @@ export class Supervisor extends EventEmitter {
   private eventLog: EventLog;
   private scheduler: Scheduler;
   private proposalManager: ProposalManager;
+  private bountyBoard: BountyBoard;
   private lastProposalCount = 0;
   private started = false;
   private agents: Map<string, AgentState> = new Map();
@@ -242,6 +245,7 @@ export class Supervisor extends EventEmitter {
     this.config = config;
     this.eventLog = new EventLog(config.ecosystemDir);
     this.proposalManager = new ProposalManager(config.ecosystemDir);
+    this.bountyBoard = new BountyBoard(config.ecosystemDir);
     this.scheduler = new Scheduler({ cycleIntervalMs: config.cycleIntervalMs });
     this.scheduler.on('cycleStart', (n: number) => this.emit('cycleStart', n));
     this.scheduler.on('cycleEnd', (n: number) => this.emit('cycleEnd', n));

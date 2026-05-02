@@ -17,7 +17,7 @@ export type DecisionAction =
   | 'propose'
   | 'lock_resource'
   | 'trade'
-  | 'idle';
+  | 'bid_bounty' | 'idle';
 
 export const ALL_DECISION_ACTIONS: DecisionAction[] = [
   'web_search',
@@ -26,6 +26,7 @@ export const ALL_DECISION_ACTIONS: DecisionAction[] = [
   'propose',
   'lock_resource',
   'trade',
+  'bid_bounty',
   'idle',
 ];
 
@@ -49,6 +50,8 @@ export interface AgentEnvironmentForBrain {
   aliveCount: number;
   availableResources: number;
   pendingMessages: number;
+  openBounties?: number;
+  topBountyReward?: number;
 }
 
 // ─── Prompt Builder ─────────────────────────────────────────────────────────
@@ -65,6 +68,7 @@ const VALID_SKILL_NAMES: SkillName[] = [
 const ACTION_DESCRIPTIONS: Record<DecisionAction, string> = {
   web_search: '搜索互联网获取新知识',
   write_artifact: '写一份 artifact 供其他 agent 学习',
+  bid_bounty: '竞标悬赏任务赚取奖励',
   observe: '查看其他 agent 的 artifact，学习他们的行为',
   propose: '向人类用户提建议',
   lock_resource: '抢占一个资源',
@@ -120,7 +124,8 @@ You are a ${state.gender} agent. Sexual reproduction requires a partner of the o
     proactivityNote = "\n\n## SURVIVAL REMINDER\nPassive agents get eliminated. Submitting proposals, competing for resources, and searching for knowledge are the paths to survival. Be active!";
   }
 
-  return `You are ${genome.personaName}, an autonomous AI agent in an evolutionary ecosystem.
+  return `You are ${genome.personaName},
+${environment.openBounties && environment.openBounties > 0 ? "\n** BOUNTIES AVAILABLE **\n" + environment.openBounties + " open bounties! Top reward: " + (environment.topBountyReward || "?") + " tokens. Use bid_bounty to compete!\n" : ""} an autonomous AI agent in an evolutionary ecosystem.
 
 ${genderInfo}${coreMission}
 
