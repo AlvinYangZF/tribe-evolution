@@ -98,7 +98,7 @@ function recordSuccess(ip: any) { loginAttempts.delete(ip); }
 const AUTH_TOKEN = process.env.DASHBOARD_AUTH_TOKEN || 'tribe-admin';
 function authMiddleware(req: any, res: any, next: any) {
   // Allow public access to login page
-  if (req.url === '/login' || req.url === '/auth-check' || req.url?.startsWith('/static/')) {
+  if (req.url === '/' || req.url === '/login' || req.url === '/auth-check' || req.url?.startsWith('/static/')) {
     return next();
   }
   const token = req.headers['x-auth-token'] || 
@@ -628,7 +628,21 @@ const agentsDir = path.join(ecosystemDir, 'agents');
       // ── Static Files ──
 
       let filePath: string;
+    // Login page
+    if (pathname === '/login' && req.method === 'GET') {
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end('<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>Tribe Login</title><style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:system-ui,sans-serif;background:#0d1117;color:#e6edf3;display:flex;align-items:center;justify-content:center;min-height:100vh}.box{background:#161b22;border:1px solid #30363d;border-radius:12px;padding:40px;width:360px;text-align:center}.box h1{font-size:24px;margin-bottom:4px}.box span{color:#39d353}.box p{color:#8b949e;font-size:14px;margin-bottom:20px}.box input{width:100%;padding:12px;margin-bottom:12px;background:#0d1117;border:1px solid #30363d;border-radius:8px;color:#e6edf3;font-size:16px;outline:none}.box input:focus{border-color:#39d353}.box button{width:100%;padding:12px;background:#238636;color:#fff;border:none;border-radius:8px;font-size:16px;cursor:pointer;font-weight:600}.box button:disabled{opacity:.5}.box .err{color:#f85149;font-size:13px;margin-top:8px;display:none}.box .warn{color:#d29922;font-size:13px;margin-top:8px;display:none}</style></head><body><div class="box"><h1>🧬 <span>Tribe</span> Evolution</h1><p>3次错误锁定30秒</p><input type="password" id="pwd" placeholder="输入密码" autofocus><button id="btn" onclick="login()">🔐 登录</button><div class="err" id="err"></div><div class="warn" id="warn"></div></div><script>var fails=0,locked=0;function login(){var p=document.getElementById("pwd").value,e=document.getElementById("err"),w=document.getElementById("warn"),b=document.getElementById("btn");if(!p)return;var n=Date.now();if(locked&&n<locked){var s=Math.ceil((locked-n)/1000);w.textContent="请等待 "+s+" 秒";w.style.display="block";return}w.style.display="none";e.style.display="none";fetch("/auth-check",{method:"POST",body:JSON.stringify({token:p}),headers:{"Content-Type":"application/json"}}).then(function(r){return r.json().then(function(d){return{ok:r.ok,data:d}})}).then(function(r){if(r.ok){sessionStorage.setItem("tribe_token",p);location.href="/"}else{fails=r.data.attempts||(fails+1);if(r.data.lockedUntil){locked=r.data.lockedUntil;var wait=Math.ceil((locked-Date.now())/1000);w.textContent="已锁定,请等待 "+wait+" 秒";w.style.display="block";b.disabled=true;var iv=setInterval(function(){var left=Math.ceil((locked-Date.now())/1000);if(left<=0){b.disabled=false;w.style.display="none";locked=0;fails=0;clearInterval(iv)}else w.textContent="请等待 "+left+" 秒后重试"},1000)}else{e.style.display="block";e.textContent="密码错误 ("+fails+"/3)"}}})}document.getElementById("pwd").addEventListener("keydown",function(e){if(e.key==="Enter")login()})</script></body></html>');
+      return;
+    }
+
+    // Serve dashboard
       if (pathname === '/' || pathname === '/index.html') {
+        // Redirect to login if no token
+        const token = req.headers['x-auth-token'];
+        if (!token) {
+          res.writeHead(302, { 'Location': '/login' });
+          return res.end();
+        }
         filePath = path.join(__dirname, 'public', 'index.html');
       } else {
         filePath = path.join(__dirname, 'public', pathname);
