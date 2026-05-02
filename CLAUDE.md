@@ -83,7 +83,11 @@ When an agent picks `propose`, the Supervisor creates a `Proposal`, runs `evalua
 
 ### Bounty state machine (`supervisor/bounty-board.ts`)
 
-`open → bidding → awarded → executing → verifying → {completed | executing (retry) | open (exhausted)}`. Transitions are guarded by `VALID_TRANSITIONS` — call `assertTransition` when adding new edges. Verification runs `shell_test`/`file_check`/`api_check`/`llm_review` (the last is a no-op stub). Losing bidders are refunded 50% of deposit; failing past `maxRetries` (default 3) reopens the bounty and burns 20% of the winner's deposit.
+`open → bidding → awarded → executing → submitted → publisher_review → supervisor_review → completed`. Either review tier can reject back to `executing`. Transitions are guarded by `VALID_TRANSITIONS` — call `assertTransition` when adding new edges. Verification runs `shell_test`/`file_check`/`api_check`/`llm_review` (the last is a no-op stub). Losing bidders are refunded 50% of deposit; failing past `maxRetries` (default 3) reopens the bounty and burns 20% of the winner's deposit.
+
+Bounty rewards are funded by the system `Treasury` (`supervisor/treasury.ts`, persisted at `ecosystem/treasury.json`). `awardBid` debits the treasury by `bounty.reward`; `completeBounty` credits the winner; `failVerification` (exhausted) refunds the treasury. The same treasury funds auto-approved proposal rewards. **No path mints tokens from thin air** — if you add a new payout, route it through the treasury.
+
+`shell_test` is **disabled unless `BOUNTY_SHELL_SANDBOX_CMD` is set** (safe-by-default). When set, the value is whitespace-split into argv prefix and prepended to `['sh', '-c', test.command]`. Recommended on Linux: `bwrap --ro-bind / / --tmpfs /tmp --unshare-net --unshare-pid --die-with-parent --`. Tests use `env` as a passthrough.
 
 ### Dashboard
 

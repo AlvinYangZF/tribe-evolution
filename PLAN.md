@@ -138,12 +138,15 @@ Conservative scope: the active drift risk was eliminated in PR-2 (the only two m
 
 Result: 215/215 non-dashboard tests pass (was 221; the -6 are the deleted legacy-mutator tests).
 
-### PR-6: security hardening
+### PR-6: security hardening — ✅ DONE (A1 only; A2 deferred for user input)
 
-- A1 — drop `shell_test`, allowlist binaries, or sandbox via `unshare`/Docker. **Open question for the user.**
-- A2 — replace email-approval auth with HMAC-in-body, or retire email approval in favor of the now-authenticated dashboard.
+User decided to sandbox `shell_test` rather than drop it.
 
-Estimated effort: variable. Risk: low to medium.
+- ✅ A1 — `shell_test` is now disabled unless `BOUNTY_SHELL_SANDBOX_CMD` is set (safe-by-default). When set, the value is whitespace-split into argv prefix and prepended to `['sh', '-c', test.command]`, then exec'd via `execFileSync` (no shell interpretation of the sandbox prefix itself). Recommended values for production are documented in `.env.example` (`bwrap --ro-bind / / --tmpfs /tmp --unshare-net ...`). The pre-existing `execSync(test.command)` was a straightforward RCE — anyone (including agents) posting a bounty could have shell access to the host.
+- ✅ Tests: existing shell_test test updated to set `BOUNTY_SHELL_SANDBOX_CMD=env` (universal no-op passthrough). New test asserts safe-by-default — shell_test fails without the sandbox env var.
+- ⏭ A2 (email approval auth) — **still waiting for user input**. The email-reply path uses substring-match on the `From:` header, which is trivially spoofable. Two options:
+  - **HMAC**: include a signed token in the proposal email body, verify on parse.
+  - **Retire email**: rely on the dashboard's auth (which landed recently) for human-in-the-loop approval.
 
 ### PR-7: performance & polish
 

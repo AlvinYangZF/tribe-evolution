@@ -524,31 +524,80 @@ describe('BountyBoard', () => {
 
   // ─── Verification test types ───────────────────────────────────────────
 
-  it('should run shell_test verification', async () => {
+  it('should fail shell_test when no sandbox is configured (safe-by-default)', async () => {
+    const creator = makeAgent('creator_sh_off', 10000);
+    const winner = makeAgent('winner_sh_off', 5000);
+    await writeAgent(tempDir, creator);
+    await writeAgent(tempDir, winner);
+
+    const prevSandbox = process.env.BOUNTY_SHELL_SANDBOX_CMD;
+    delete process.env.BOUNTY_SHELL_SANDBOX_CMD;
+
+    try {
+      const bounty = await board.createBounty({
+        title: 'Shell test off',
+        description: 'Desc',
+        creatorId: 'creator_sh_off',
+        type: 'feature',
+        reward: 1000,
+        deadline: Date.now() + 86400000,
+        depositRate: 0.5,
+        verificationTests: [{ type: 'shell_test', description: 'Should not run', command: 'echo unsafe' }],
+      });
+      const bid = await board.placeBid(bounty.id, 'winner_sh_off', 800, 'Plan');
+      await board.awardBid(bounty.id, bid.id);
+      await board.submitResult(bounty.id, 'winner_sh_off', 'http://artifact', 'Done');
+
+      const result = await board.runVerification(bounty.id);
+      expect(result.passed).toBe(false);
+      expect(result.results.join(' ')).toMatch(/sandbox/i);
+    } finally {
+      if (prevSandbox === undefined) {
+        delete process.env.BOUNTY_SHELL_SANDBOX_CMD;
+      } else {
+        process.env.BOUNTY_SHELL_SANDBOX_CMD = prevSandbox;
+      }
+    }
+  });
+
+  it('should run shell_test through a configured sandbox prefix', async () => {
     const creator = makeAgent('creator_sh', 10000);
     const winner = makeAgent('winner_sh', 5000);
     await writeAgent(tempDir, creator);
     await writeAgent(tempDir, winner);
 
-    const bounty = await board.createBounty({
-      title: 'Shell test',
-      description: 'Desc',
-      creatorId: 'creator_sh',
-      type: 'feature',
-      reward: 1000,
-      deadline: Date.now() + 86400000,
-      depositRate: 0.5,
-      verifierAgentId: 'winner_sh',
-      verificationTests: [{ type: 'shell_test', description: 'Echo test', command: 'echo "hello"' }],
-    });
+    // `env` is a universal no-op sandbox prefix for tests — it just runs the
+    // following argv as the program. Production should use bwrap/firejail.
+    const prevSandbox = process.env.BOUNTY_SHELL_SANDBOX_CMD;
+    process.env.BOUNTY_SHELL_SANDBOX_CMD = 'env';
 
-    const bid = await board.placeBid(bounty.id, 'winner_sh', 800, 'Plan');
-    await board.awardBid(bounty.id, bid.id);
-    await board.submitResult(bounty.id, 'winner_sh', 'http://artifact', 'Done');
+    try {
+      const bounty = await board.createBounty({
+        title: 'Shell test',
+        description: 'Desc',
+        creatorId: 'creator_sh',
+        type: 'feature',
+        reward: 1000,
+        deadline: Date.now() + 86400000,
+        depositRate: 0.5,
+        verifierAgentId: 'winner_sh',
+        verificationTests: [{ type: 'shell_test', description: 'Echo test', command: 'echo "hello"' }],
+      });
 
-    const result = await board.runVerification(bounty.id);
-    expect(result.passed).toBe(true);
-    expect(result.results.length).toBeGreaterThan(0);
+      const bid = await board.placeBid(bounty.id, 'winner_sh', 800, 'Plan');
+      await board.awardBid(bounty.id, bid.id);
+      await board.submitResult(bounty.id, 'winner_sh', 'http://artifact', 'Done');
+
+      const result = await board.runVerification(bounty.id);
+      expect(result.passed).toBe(true);
+      expect(result.results.length).toBeGreaterThan(0);
+    } finally {
+      if (prevSandbox === undefined) {
+        delete process.env.BOUNTY_SHELL_SANDBOX_CMD;
+      } else {
+        process.env.BOUNTY_SHELL_SANDBOX_CMD = prevSandbox;
+      }
+    }
   });
 
   it('should run file_check verification', async () => {

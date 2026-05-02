@@ -13,7 +13,7 @@
 
 import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs/promises';
 import { safeReadJSON, safeWriteJSON, ensureDir } from '../shared/filesystem.js';
 import { Treasury } from './treasury.js';
@@ -304,7 +304,27 @@ export class BountyBoard {
     switch (test.type) {
       case 'shell_test': {
         if (!test.command) throw new Error('shell_test requires command');
-        execSync(test.command, { timeout: 10000, stdio: 'pipe' });
+        // Bounty verifications run agent-supplied shell commands. To prevent
+        // an agent (or a hallucinating LLM) from posting a bounty whose
+        // verification ends up running `rm -rf /` on the host, shell_test
+        // is disabled unless the operator configures a sandbox.
+        //
+        // BOUNTY_SHELL_SANDBOX_CMD is split on whitespace into argv[0] + args
+        // and prepended to ['sh', '-c', test.command]. Recommended values:
+        //   bwrap --ro-bind / / --tmpfs /tmp --unshare-net --unshare-pid \
+        //         --die-with-parent --
+        //   firejail --noprofile --net=none --
+        // Tests can use `env` as a passthrough (no real sandboxing).
+        const sandboxCmd = process.env.BOUNTY_SHELL_SANDBOX_CMD;
+        if (!sandboxCmd || !sandboxCmd.trim()) {
+          throw new Error('shell_test requires BOUNTY_SHELL_SANDBOX_CMD to be configured');
+        }
+        const sandboxArgv = sandboxCmd.trim().split(/\s+/);
+        const [sandboxBin, ...sandboxArgs] = sandboxArgv;
+        execFileSync(sandboxBin, [...sandboxArgs, 'sh', '-c', test.command], {
+          timeout: 10000,
+          stdio: 'pipe',
+        });
         return true;
       }
 
