@@ -326,20 +326,20 @@ export class BountyBoard {
   // ─── State transitions ────────────────────────────────────────────────
 
   async publisherApprove(bountyId: string): Promise<Bounty> {
-    const bounty = await this.getBounty(bountyId);
-    if (!bounty) throw new Error('Bounty not found');
+    const { bounties, bounty, index } = await this.findBounty(bountyId);
     if (bounty.status !== 'submitted') throw new Error('Must be in submitted state');
-    bounty.status = 'publisher_review';
-    await this.saveAll([bounty]);
-    return bounty;
+    const updated: Bounty = { ...bounty, status: 'publisher_review' };
+    bounties[index] = updated;
+    await this.saveAll(bounties);
+    return updated;
   }
   async publisherReject(bountyId: string): Promise<Bounty> {
-    const bounty = await this.getBounty(bountyId);
-    if (!bounty) throw new Error('Bounty not found');
+    const { bounties, bounty, index } = await this.findBounty(bountyId);
     if (bounty.status !== 'submitted') throw new Error('Must be in submitted state');
-    bounty.status = 'executing';
-    await this.saveAll([bounty]);
-    return bounty;
+    const updated: Bounty = { ...bounty, status: 'executing' };
+    bounties[index] = updated;
+    await this.saveAll(bounties);
+    return updated;
   }
 
   async completeBounty(bountyId: string): Promise<Bounty> {

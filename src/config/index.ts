@@ -1,6 +1,6 @@
 import dotenv from 'dotenv';
-// Load .env from project root
-dotenv.config({ path: '/Users/zifengyang/tribe-evolution/.env' });
+// Load .env from the current working directory.
+dotenv.config();
 
 export interface Config {
   deepseekApiKey: string;

@@ -195,7 +195,10 @@ async function decideForAgent(
             await saveAgent(agent);
           }
         }
-      } catch(e) {}
+      } catch (err: unknown) {
+        const m = err instanceof Error ? err.message : String(err);
+        console.warn(`  ⚠️ ${agent.id} bid_bounty failed: ${m}`);
+      }
     }
 
     // When agent chooses 'develop_skill', research a new skill
@@ -357,7 +360,7 @@ export class Supervisor extends EventEmitter {
   }
 
   private async runCycle(cycleNum: number): Promise<void> {
-    await this.eventLog.append({ type: 'token_allocated', agentId: 'supervisor', data: { cycle: cycleNum, action: 'cycle_start' } });
+    await this.eventLog.append({ type: 'cycle_start', agentId: 'supervisor', data: { cycle: cycleNum } });
     console.log(`\n🔄 Cycle ${cycleNum} — ${this.agents.size} agents`);
     await this.loadAgents();
 
@@ -436,44 +439,53 @@ export class Supervisor extends EventEmitter {
     const totalFitness = alive.reduce((s, a) => s + a.fitness, 0);
     const avgFitness = alive.length > 0 ? (totalFitness / alive.length).toFixed(1) : '0';
     console.log(`  📊 ${alive.length} alive, avg fitness: ${avgFitness}`);
-    await this.eventLog.append({ type: 'task_completed', agentId: 'supervisor', data: { cycle: cycleNum, action: 'cycle_end', aliveCount: alive.length, avgFitness } });
+    await this.eventLog.append({ type: 'cycle_end', agentId: 'supervisor', data: { cycle: cycleNum, aliveCount: alive.length, avgFitness } });
   }
 
 
   private async processBountyExecutions(alive: AgentState[]): Promise<void> {
+    let awarded;
     try {
-      const awarded = await this.bountyBoard.listBounties('awarded');
-      for (const bounty of awarded) {
-        if (!bounty.winningBidId) continue;
-        const winningBid = bounty.bids.find((b: any) => b.id === bounty.winningBidId);
-        if (!winningBid) continue;
-        const winner = alive.find(a => a.id === winningBid.agentId);
-        if (!winner) continue;
+      awarded = await this.bountyBoard.listBounties('awarded');
+    } catch (err: unknown) {
+      const m = err instanceof Error ? err.message : String(err);
+      console.warn(`  ⚠️ Bounty execution: failed to list awarded bounties: ${m}`);
+      return;
+    }
 
-        winner.contributionScore += 50;
-        const summary = "Agent " + winner.genome.personaName + " completed: " + bounty.title;
+    for (const bounty of awarded) {
+      if (!bounty.winningBidId) continue;
+      const winningBid = bounty.bids.find((b: any) => b.id === bounty.winningBidId);
+      if (!winningBid) continue;
+      const winner = alive.find(a => a.id === winningBid.agentId);
+      if (!winner) continue;
 
-        try {
-          await this.bountyBoard.submitResult(bounty.id, winner.id, summary, summary);
-          console.log("  🏗️ " + winner.id + " executing bounty: " + bounty.title.slice(0,30));
+      winner.contributionScore += 50;
+      const summary = "Agent " + winner.genome.personaName + " completed: " + bounty.title;
 
-          // Publisher auto-review (simulated — in production, user approves manually)
-          await this.bountyBoard.publisherApprove(bounty.id);
-          
-          // Supervisor review
-          if (bounty.verificationTests.length === 0) {
-            const result = await this.bountyBoard.runVerification(bounty.id);
-            if (result.passed) {
-              await this.bountyBoard.completeBounty(bounty.id);
-              winner.tokenBalance += bounty.reward;
-              await this.saveAgent(winner);
-              console.log("  ✅ Bounty completed! " + winner.id + " earned " + bounty.reward + " tokens");
-              await this.eventLog.append({ type: 'task_completed', agentId: winner.id, data: { action: 'bounty_completed', bountyId: bounty.id, reward: bounty.reward } });
-            }
+      try {
+        await this.bountyBoard.submitResult(bounty.id, winner.id, summary, summary);
+        console.log("  🏗️ " + winner.id + " executing bounty: " + bounty.title.slice(0,30));
+
+        // Publisher auto-review (simulated — in production, user approves manually)
+        await this.bountyBoard.publisherApprove(bounty.id);
+
+        // Supervisor review
+        if (bounty.verificationTests.length === 0) {
+          const result = await this.bountyBoard.runVerification(bounty.id);
+          if (result.passed) {
+            await this.bountyBoard.completeBounty(bounty.id);
+            winner.tokenBalance += bounty.reward;
+            await this.saveAgent(winner);
+            console.log("  ✅ Bounty completed! " + winner.id + " earned " + bounty.reward + " tokens");
+            await this.eventLog.append({ type: 'task_completed', agentId: winner.id, data: { action: 'bounty_completed', bountyId: bounty.id, reward: bounty.reward } });
           }
-        } catch(e) {}
+        }
+      } catch (err: unknown) {
+        const m = err instanceof Error ? err.message : String(err);
+        console.warn(`  ⚠️ Bounty ${bounty.id.slice(0,8)} execution failed: ${m}`);
       }
-    } catch(e) {}
+    }
   }
 
   private async scanProposals(): Promise<void> {

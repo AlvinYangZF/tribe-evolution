@@ -330,12 +330,18 @@ export function runCycle(agents: AgentState[], cycleNumber: number, maxAgents: n
       )
     : [];
 
-  // Step 4: Update ages and protections for survivors
-  const updatedSurvivors = survivors.map((agent) => ({
-    ...agent,
-    age: agent.age + 1,
-    protectionRounds: Math.max(0, agent.protectionRounds - 1),
-  }));
+  // Step 4: Update ages and protections for survivors. Agents who reach the
+  // death threshold (age >= 50) after incrementing are marked dead now,
+  // rather than waiting for the next cycle's evaluateFitness pass.
+  const updatedSurvivors = survivors.map((agent) => {
+    const newAge = agent.age + 1;
+    return {
+      ...agent,
+      age: newAge,
+      protectionRounds: Math.max(0, agent.protectionRounds - 1),
+      alive: agent.alive && newAge < 50,
+    };
+  });
 
   // Set generation on offspring
   const updatedOffspring = offspring.map((child) => ({
