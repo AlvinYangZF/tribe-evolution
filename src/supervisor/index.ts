@@ -156,6 +156,8 @@ async function decideForAgent(
       aliveCount,
       pendingMessages: 0,
       availableResources: 0,
+      openBounties: await (async () => { try { const b = await bountyBoard.listBounties('open'); return b.length; } catch { return 0; } })(),
+      topBountyReward: await (async () => { try { const o = await bountyBoard.listBounties('open'); return o.length > 0 ? Math.max(...o.map(b => b.reward)) : 0; } catch { return 0; } })(),
     }, llmCall);
 
     // Deduct tokens from agent balance (was previously in a detached module-level Map)
