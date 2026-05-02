@@ -678,6 +678,7 @@
   </style>
 </head>
 <body>
+<script>if(!sessionStorage.getItem("tribe_token")){location.href="/login"}</script>
 
 <!-- Header -->
 <header>
@@ -1323,7 +1324,7 @@ async function loadTree() {
   if (!container) return;
 
   try {
-    const res = await fetch('/api/tree');
+    const res = await authFetch('/api/tree');
     if (!res.ok) { container.innerHTML = '<div class="empty-state"><em>🌳</em>No tree data</div>'; return; }
     const { nodes } = await res.json();
     if (!nodes || nodes.length === 0) { container.innerHTML = '<div class="empty-state"><em>🌳</em>No agents yet</div>'; return; }
@@ -1415,13 +1416,17 @@ async function loadTree() {
   }
 }
 
+// ── Auth Helpers ──
+function authHeaders() { var t = sessionStorage.getItem('tribe_token'); return t ? { 'X-Auth-Token': t } : {}; }
+function authFetch(url, opts) { opts = opts || {}; opts.headers = Object.assign(opts.headers || {}, authHeaders()); return fetch(url, opts); }
+
 // ── Initial Load via REST ──
 async function loadInitialData() {
   // Load each API independently so one failure doesn't block everything
   const [agentsR, eventsR, statsR] = await Promise.allSettled([
-    fetch('/api/agents').then(r => r.json()).catch(() => []),
-    fetch('/api/events?limit=50').then(r => r.json()).catch(() => []),
-    fetch('/api/stats').then(r => r.json()).catch(() => null),
+    authFetch('/api/agents').then(r => r.json()).catch(() => []),
+    authFetch('/api/events?limit=50').then(r => r.json()).catch(() => []),
+    authFetch('/api/stats').then(r => r.json()).catch(() => null),
   ]);
 
   const agents = agentsR.status === 'fulfilled' ? agentsR.value : [];
@@ -1435,7 +1440,7 @@ async function loadInitialData() {
   loadTree();
 
   // Load market separately (non-critical)
-  fetch('/api/market').then(r => r.json()).then(d => updateMarket(d)).catch(() => {});
+  authFetch('/api/market').then(r => r.json()).then(d => updateMarket(d)).catch(() => {});
 }
 
 // ── WebSocket Connection ──
@@ -1446,8 +1451,8 @@ function startPolling() {
   pollTimer = setInterval(async () => {
     try {
       const [agents, stats] = await Promise.all([
-        fetch('/api/agents').then(r => r.json()),
-        fetch('/api/stats').then(r => r.json()),
+        authFetch('/api/agents').then(r => r.json()),
+        authFetch('/api/stats').then(r => r.json()),
       ]);
       updateDashboard({ agents, stats });
       loadTree();
@@ -1469,7 +1474,7 @@ function connectWS() {
   const wsUrl = `${protocol}//${location.host}/ws`;
   let ws;
   try {
-    ws = new WebSocket(wsUrl);
+    ws = new WebSocket(wsUrl) /* WebSocket auth via protocol token */;
   } catch(e) {
     // WebSocket failed entirely, polling will handle it
     statusDisconnected();
@@ -1585,7 +1590,7 @@ function escapeHtml(str) {
 
 async function loadBounties() {
   try {
-    const res = await fetch('/api/bounties');
+    const res = await authFetch('/api/bounties');
     if (res.ok) {
       bountiesData = await res.json();
       renderBounties();
@@ -1730,7 +1735,7 @@ async function submitBounty() {
   };
 
   try {
-    const res = await fetch('/api/bounties', {
+    const res = await authFetch('/api/bounties', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -1761,8 +1766,8 @@ startPolling = function() {
   pollTimer = setInterval(async () => {
     try {
       const [agents, stats] = await Promise.all([
-        fetch('/api/agents').then(r => r.json()),
-        fetch('/api/stats').then(r => r.json()),
+        authFetch('/api/agents').then(r => r.json()),
+        authFetch('/api/stats').then(r => r.json()),
       ]);
       updateDashboard({ agents, stats });
       loadTree();

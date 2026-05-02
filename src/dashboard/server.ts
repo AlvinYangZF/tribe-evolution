@@ -66,7 +66,27 @@ interface TreeAgentNode {
 
 export function startDashboard(ecosystemDir: string, port: number = 3000) {
   const eventLog = new EventLog(ecosystemDir);
-  const agentsDir = path.join(ecosystemDir, 'agents');
+  
+// ── Auth Middleware ──
+const AUTH_TOKEN = process.env.DASHBOARD_AUTH_TOKEN || 'tribe-admin';
+function authMiddleware(req: any, res: any, next: any) {
+  // Allow public access to login page
+  if (req.url === '/login' || req.url === '/login.html' || req.url?.startsWith('/static/')) {
+    return next();
+  }
+  const token = req.headers['x-auth-token'] || 
+    new URL(req.url || '', 'http://x').searchParams.get('token');
+  if (token === AUTH_TOKEN) return next();
+  if (req.method === 'GET' && req.headers['accept']?.includes('text/html')) {
+    res.writeHead(302, { 'Location': '/login' });
+    return res.end();
+  }
+  res.writeHead(401, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ error: 'Unauthorized' }));
+}
+
+
+const agentsDir = path.join(ecosystemDir, 'agents');
 
   // Keep track of current data caches
   let cachedAgents: AgentSummary[] = [];
@@ -285,6 +305,11 @@ export function startDashboard(ecosystemDir: string, port: number = 3000) {
   // ── HTTP Server ──
 
   const server = http.createServer(async (req, res) => {
+    // Auth guard
+    let authSkipped = false;
+    const originalEnd = res.end.bind(res);
+    authMiddleware(req, res, () => { authSkipped = true; });
+    if (!authSkipped) return;
     // CORS
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, OPTIONS');
