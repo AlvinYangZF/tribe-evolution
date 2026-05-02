@@ -180,7 +180,48 @@ async function decideForAgent(
     const reason = (decision.reasoning ?? '').slice(0, 60);
     console.log(`  🧠 ${agent.id} (${g.personaName}): ${decision.action} — ${reason}`);
 
-    // When agent chooses 'propose', create proposal and auto-evaluate
+    // When agent chooses 'bid_bounty', actually place a bid
+    if (decision.action === 'bid_bounty') {
+      try {
+        const openBounties = await bountyBoard.listBounties('open');
+        if (openBounties.length > 0 && agent.tokenBalance >= 1000) {
+          const target = openBounties[Math.floor(Math.random() * openBounties.length)];
+          const bidPrice = Math.floor(target.reward * 0.7 * (0.8 + Math.random() * 0.4));
+          const actualPrice = Math.min(bidPrice, agent.tokenBalance - 100);
+          if (actualPrice > 0) {
+            await bountyBoard.placeBid(target.id, agent.id, actualPrice, 'Agent bids');
+            console.log('  🎯 ' + agent.id + ' bid ' + actualPrice + ' on ' + target.title.slice(0, 30));
+            agent.contributionScore += 15;
+            await saveAgent(agent);
+          }
+        }
+      } catch(e) {}
+    }
+
+    // When agent chooses 'develop_skill', research a new skill
+    if (decision.action === 'develop_skill') {
+      const skillTypes = ['research', 'implement', 'tool'];
+      const type = skillTypes[Math.floor(Math.random() * skillTypes.length)];
+      const newSkills = {
+        research: ['deep_research', 'trend_analysis', 'knowledge_synthesis'],
+        implement: ['code_generation', 'system_design', 'auto_debug'],
+        tool: ['web_automation', 'data_scraping', 'api_integration'],
+      };
+      const skillName = newSkills[type as keyof typeof newSkills][Math.floor(Math.random() * newSkills[type as keyof typeof newSkills].length)];
+      const cost = 5000;
+      if (agent.tokenBalance >= cost) {
+        agent.tokenBalance -= cost;
+        agent.genome.skills = agent.genome.skills || {};
+        (agent.genome.skills as Record<string, number>)[skillName] = ((agent.genome.skills as Record<string, number>)[skillName] || 0.3) + 0.2;
+        agent.contributionScore += 20;
+        console.log('  🔬 ' + agent.id + ' developed ' + type + ' skill: ' + skillName);
+        await saveAgent(agent);
+      } else {
+        agent.contributionScore = 10;
+      }
+    }
+
+        // When agent chooses 'propose', create proposal and auto-evaluate
     // Cooldown: only propose every 5 cycles
     if (decision.action === 'propose') {
       const lastPropose = agentLastProposal.get(agent.id) || 0;
