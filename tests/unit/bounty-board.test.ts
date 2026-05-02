@@ -719,6 +719,45 @@ describe('BountyBoard', () => {
     expect(bounty.verifierAgentId).toBe('verifier_1');
   });
 
+  // ─── Custom AgentTokenMutator (C11 fix) ────────────────────────────────
+
+  it('routes agent token mutations through the injected mutator', async () => {
+    // The supervisor injects a mutator that updates its in-memory map so
+    // a deduction (e.g., placeBid deposit) doesn't get clobbered when the
+    // supervisor later persists a stale in-memory copy of the agent.
+    const inMemory = new Map<string, AgentState>();
+    inMemory.set('m_creator', makeAgent('m_creator', 10000));
+    inMemory.set('m_bidder', makeAgent('m_bidder', 5000));
+
+    let writes = 0;
+    const customBoard = new (await import('../../src/supervisor/bounty-board.js')).BountyBoard(
+      tempDir,
+      undefined,
+      {
+        read: async (id) => inMemory.get(id) ?? null,
+        write: async (agent) => {
+          writes++;
+          inMemory.set(agent.id, agent);
+        },
+      },
+    );
+
+    const bounty = await customBoard.createBounty({
+      title: 'mutator test', description: 'd', creatorId: 'm_creator',
+      type: 'bug_fix', reward: 1000, deadline: Date.now() + 86400000, depositRate: 0.5,
+    });
+
+    // placeBid → deduct deposit → mutator.write
+    await customBoard.placeBid(bounty.id, 'm_bidder', 800, 'plan');
+    expect(writes).toBeGreaterThanOrEqual(1);
+    expect(inMemory.get('m_bidder')!.tokenBalance).toBe(5000 - 500);
+
+    // The default file-based path was NOT used: nothing should exist on disk
+    // for the bidder under this tempDir.
+    const onDisk = await readAgent(tempDir, 'm_bidder');
+    expect(onDisk).toBeNull();
+  });
+
   // ─── Treasury-funded escrow ────────────────────────────────────────────
 
   it('should debit the treasury at award time and credit the winner at completion', async () => {

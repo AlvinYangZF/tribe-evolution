@@ -49,15 +49,36 @@ function assertTransition(from: BountyStatus, to: BountyStatus): void {
   }
 }
 
+/**
+ * Pluggable agent-token I/O. The default implementation reads/writes JSON
+ * files under `<ecosystemDir>/agents/`. The Supervisor injects one that
+ * routes through its in-memory `Map<id, AgentState>` so an agent mutation
+ * triggered by the bounty board (e.g., placeBid debiting a deposit) doesn't
+ * race with a stale in-memory copy that the supervisor's cycle loop later
+ * persists, silently overwriting the deduction.
+ */
+export interface AgentTokenMutator {
+  read: (agentId: string) => Promise<AgentState | null>;
+  write: (agent: AgentState) => Promise<void>;
+}
+
 export class BountyBoard {
   private bountiesFilePath: string;
   private agentsDir: string;
   private treasury: Treasury;
+  private mutator: AgentTokenMutator;
 
-  constructor(private ecosystemDir: string, treasury?: Treasury) {
+  constructor(private ecosystemDir: string, treasury?: Treasury, mutator?: AgentTokenMutator) {
     this.bountiesFilePath = path.join(ecosystemDir, BOUNTIES_DIR, BOUNTIES_FILE);
     this.agentsDir = path.join(ecosystemDir, AGENTS_DIR);
     this.treasury = treasury ?? new Treasury(ecosystemDir);
+    this.mutator = mutator ?? {
+      read: (id) => safeReadJSON<AgentState>(path.join(this.agentsDir, `${id}.json`)),
+      write: async (agent) => {
+        await ensureDir(this.agentsDir);
+        await safeWriteJSON(path.join(this.agentsDir, `${agent.id}.json`), agent);
+      },
+    };
   }
 
   getTreasury(): Treasury {
@@ -85,16 +106,11 @@ export class BountyBoard {
   }
 
   private async readAgent(agentId: string): Promise<AgentState> {
-    const agent = await safeReadJSON<AgentState>(path.join(this.agentsDir, `${agentId}.json`));
+    const agent = await this.mutator.read(agentId);
     if (!agent) {
       throw new Error(`Agent not found: ${agentId}`);
     }
     return agent;
-  }
-
-  private async writeAgent(agent: AgentState): Promise<void> {
-    await ensureDir(this.agentsDir);
-    await safeWriteJSON(path.join(this.agentsDir, `${agent.id}.json`), agent);
   }
 
   /**
@@ -107,7 +123,7 @@ export class BountyBoard {
       throw new Error(`Insufficient token balance for agent ${agentId}: ${agent.tokenBalance} < ${amount}`);
     }
     agent.tokenBalance -= amount;
-    await this.writeAgent(agent);
+    await this.mutator.write(agent);
     return agent;
   }
 
@@ -117,7 +133,7 @@ export class BountyBoard {
   private async addAgentTokens(agentId: string, amount: number): Promise<AgentState> {
     const agent = await this.readAgent(agentId);
     agent.tokenBalance += amount;
-    await this.writeAgent(agent);
+    await this.mutator.write(agent);
     return agent;
   }
 

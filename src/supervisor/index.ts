@@ -266,7 +266,29 @@ export class Supervisor extends EventEmitter {
     this.config = config;
     this.eventLog = new EventLog(config.ecosystemDir);
     this.proposalManager = new ProposalManager(config.ecosystemDir);
-    this.bountyBoard = new BountyBoard(config.ecosystemDir);
+    // Route the bounty board's agent-token mutations through this
+    // supervisor's in-memory map so a deduction (e.g., placeBid deposit) and
+    // a later in-cycle saveAgent don't race. Falls through to disk for
+    // agents not in memory (e.g., already-eliminated bidders).
+    this.bountyBoard = new BountyBoard(
+      config.ecosystemDir,
+      undefined,
+      {
+        read: async (id) => {
+          const inMem = this.agents.get(id);
+          if (inMem) return inMem;
+          const dir = path.join(config.ecosystemDir, 'agents');
+          try {
+            const raw = await fs.readFile(path.join(dir, `${id}.json`), 'utf-8');
+            return JSON.parse(raw) as AgentState;
+          } catch { return null; }
+        },
+        write: async (agent) => {
+          if (this.agents.has(agent.id)) this.agents.set(agent.id, agent);
+          await this.saveAgent(agent);
+        },
+      },
+    );
     this.scheduler = new Scheduler({ cycleIntervalMs: config.cycleIntervalMs });
     this.scheduler.on('cycleStart', (n: number) => this.emit('cycleStart', n));
     this.scheduler.on('cycleEnd', (n: number) => this.emit('cycleEnd', n));

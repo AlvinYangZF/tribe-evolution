@@ -59,7 +59,7 @@ findings into themed PRs sized for independent review and merge.
 | C8 🆕 | `life-cycle.ts:333-338` | `runCycle` increments age after `eliminateStepped` but never re-marks agents who cross age 50 as dead — a survivor can come back alive at age 50 |
 | C9 🆕 | `tests/unit/bounty-board.test.ts` | 3 tests expect the pre-rename `verifying` status (replaced by `submitted` in two-tier review). Pre-existing on `main`. Belongs in PR-2 |
 | C10 🆕 | `tests/unit/dashboard-server.test.ts` | 31 tests fail with 401 because the dashboard auth landed without test-side auth headers. Pre-existing on `main`. Belongs in PR-7 |
-| C11 🆕 | `bounty-board.ts` ↔ `supervisor/index.ts` | `BountyBoard.deductAgentTokens`/`addAgentTokens` write directly to agent JSON, bypassing the supervisor's in-memory `this.agents` map. If a bounty action mutates an agent during a cycle, the supervisor's in-memory copy can overwrite it at end-of-cycle `saveAgent` time. Mitigated by `loadAgents()` at the start of every cycle. Belongs in a follow-up to PR-3 (token-mutation unification) |
+| C11 🆕 | `bounty-board.ts` ↔ `supervisor/index.ts` | ✅ Fixed in PR-10. |
 
 ### D. Performance / hygiene
 
@@ -155,6 +155,18 @@ User decided to sandbox `shell_test` rather than drop it.
 - ✅ `email-security.test.ts` rewritten to import the real module instead of inlining a copy. New tests cover: matching token approval/reject, missing token, wrong token, secret mismatch, disabled-by-default, and proposal-id-from-subject.
 
 Result: 254/254 tests pass.
+
+### PR-10: token-mutation unification — ✅ DONE (C11)
+
+The pre-PR-10 hot path had an actual silent bug: in `bid_bounty`, `BountyBoard.placeBid` deducted the deposit by writing the agent JSON directly, but `decideForAgent` was holding a stale in-memory `agent` and called `saveAgent(agent)` afterwards — overwriting the deduction with the pre-deduct balance. Mitigated previously only because `loadAgents()` at cycle start refreshed the map between cycles, but the within-cycle write was lost.
+
+- ✅ `BountyBoard` now accepts an optional `AgentTokenMutator { read, write }` in its constructor. Default implementation reads/writes the JSON files directly (tests + standalone usage stay green).
+- ✅ The `Supervisor` constructs its `BountyBoard` with a mutator that:
+  - Reads from the in-memory `Map<id, AgentState>` first, falling back to disk for agents not currently loaded (e.g., bidders who were eliminated between bid placement and award resolution).
+  - Writes by updating the map (when present) and persisting via `saveAgent`. So a `placeBid` deduction is visible to the rest of `decideForAgent` and isn't clobbered by a downstream save.
+- ✅ Regression test: a `BountyBoard` with a custom in-memory mutator runs through `placeBid` and verifies (a) the deposit landed on the in-memory copy and (b) nothing was written to disk under the temp ecosystem dir, proving the mutator path was actually used.
+
+Result: 254/254 tests pass; 26 bounty-board tests now (was 25).
 
 ### PR-7: performance & polish — partial
 
