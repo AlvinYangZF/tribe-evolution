@@ -447,11 +447,20 @@ export class Supervisor extends EventEmitter {
       await this.eventLog.append({ type: 'task_completed', agentId: agent.id, data: { cycle: cycleNum, contribution: agent.contributionScore } });
     }
 
-    const evolved = await runLifeCycle([...this.agents.values()], cycleNum, this.config.maxAgents);
+    // Only feed living agents into the lifecycle. Already-dead agents stay
+    // on disk but shouldn't be re-ranked, re-aged, or re-extincted.
+    const evolved = await runLifeCycle(
+      [...this.agents.values()].filter(a => a.alive),
+      cycleNum,
+      this.config.maxAgents,
+    );
     this.agents.clear();
     for (const agent of evolved) {
-      this.agents.set(agent.id, agent);
+      // Persist everything runCycle returned — survivors, offspring, and
+      // freshly-dead agents. The dead ones must hit disk with alive=false
+      // or they revive on the next loadAgents().
       await this.saveAgent(agent);
+      if (agent.alive) this.agents.set(agent.id, agent);
     }
 
     const newBorns = evolved.filter(a => a.age <= 1 && a.generation > 0);

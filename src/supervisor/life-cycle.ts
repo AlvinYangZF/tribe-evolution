@@ -354,6 +354,8 @@ export function runCycle(agents: AgentState[], cycleNumber: number, maxAgents: n
     generation: cycleNumber,
   }));
 
-  // Step 5: Return new population
-  return [...updatedSurvivors, ...updatedOffspring];
+  // Step 5: Return new population. Include eliminated agents (alive=false) so
+  // the caller can persist their death — otherwise dead-of-age agents revive
+  // from disk on the next cycle and live forever as zombies.
+  return [...updatedSurvivors, ...updatedOffspring, ...eliminated];
 }
