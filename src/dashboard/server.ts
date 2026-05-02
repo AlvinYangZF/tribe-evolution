@@ -593,6 +593,35 @@ const agentsDir = path.join(ecosystemDir, 'agents');
         return;
       }
 
+      // PUT /api/bounties/:id/publisher-approve
+      if (pathname.startsWith('/api/bounties/') && pathname.endsWith('/publisher-approve') && req.method === 'PUT') {
+        const bountyId = pathname.slice('/api/bounties/'.length, -'/publisher-approve'.length);
+        const bounties = (await safeReadJSON<Bounty[]>(bountiesPath)) || [];
+        const idx = bounties.findIndex(b => b.id === bountyId);
+        if (idx >= 0 && bounties[idx].status === 'submitted') {
+          bounties[idx].status = 'publisher_review';
+          await safeWriteJSON(bountiesPath, bounties);
+          res.writeHead(200, { "Content-Type": "application/json" }); res.end(JSON.stringify(bounties[idx]));
+        } else {
+          res.writeHead(400, { "Content-Type": "application/json" }); res.end(JSON.stringify({error:'Invalid state'}));
+        }
+        return;
+      }
+      // PUT /api/bounties/:id/publisher-reject
+      if (pathname.startsWith('/api/bounties/') && pathname.endsWith('/publisher-reject') && req.method === 'PUT') {
+        const bountyId = pathname.slice('/api/bounties/'.length, -'/publisher-reject'.length);
+        const data = await readJSONBody(req);
+        const bounties = (await safeReadJSON<Bounty[]>(bountiesPath)) || [];
+        const idx = bounties.findIndex(b => b.id === bountyId);
+        if (idx >= 0 && bounties[idx].status === 'submitted') {
+          bounties[idx].status = 'executing';
+          await safeWriteJSON(bountiesPath, bounties);
+          res.writeHead(200, { "Content-Type": "application/json" }); res.end(JSON.stringify(bounties[idx]));
+        } else {
+          res.writeHead(400, { "Content-Type": "application/json" }); res.end(JSON.stringify({error:'Invalid state'}));
+        }
+        return;
+      }
       // PUT /api/bounties/:id/award
       if (pathname.startsWith('/api/bounties/') && pathname.endsWith('/award') && req.method === 'PUT') {
         const bountyId = pathname.slice('/api/bounties/'.length, -'/award'.length);

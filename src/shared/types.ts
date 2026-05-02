@@ -131,7 +131,7 @@ export interface ExpressedGenome {
 
 // ─── Bounty types ────────────────────────────────────────────────────────
 
-export type BountyStatus = 'open' | 'bidding' | 'awarded' | 'executing' | 'verifying' | 'completed';
+export type BountyStatus = 'open' | 'bidding' | 'awarded' | 'executing' | 'submitted' | 'publisher_review' | 'supervisor_review' | 'completed';
 export type BountyType = 'bug_fix' | 'feature' | 'research' | 'data_analysis' | 'code_review' | 'other';
 export type TestType = 'shell_test' | 'file_check' | 'api_check' | 'llm_review';
 

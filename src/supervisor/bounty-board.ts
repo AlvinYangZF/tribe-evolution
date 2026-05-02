@@ -27,8 +27,10 @@ const VALID_TRANSITIONS: Record<BountyStatus, BountyStatus[]> = {
   open: ['bidding'],
   bidding: ['awarded'],
   awarded: ['executing'],
-  executing: ['verifying'],
-  verifying: ['completed', 'executing', 'open'],
+  executing: ['submitted'],
+  submitted: ['publisher_review', 'executing'],
+  publisher_review: ['supervisor_review', 'executing'],
+  supervisor_review: ['completed', 'executing'],
   completed: [],
 };
 
@@ -250,7 +252,7 @@ export class BountyBoard {
 
     const updated: Bounty = {
       ...bounty,
-      status: 'verifying',
+      status: 'submitted',
     };
 
     bounties[index] = updated;
@@ -323,6 +325,23 @@ export class BountyBoard {
 
   // ─── State transitions ────────────────────────────────────────────────
 
+  async publisherApprove(bountyId: string): Promise<Bounty> {
+    const bounty = await this.getBounty(bountyId);
+    if (!bounty) throw new Error('Bounty not found');
+    if (bounty.status !== 'submitted') throw new Error('Must be in submitted state');
+    bounty.status = 'publisher_review';
+    await this.saveAll([bounty]);
+    return bounty;
+  }
+  async publisherReject(bountyId: string): Promise<Bounty> {
+    const bounty = await this.getBounty(bountyId);
+    if (!bounty) throw new Error('Bounty not found');
+    if (bounty.status !== 'submitted') throw new Error('Must be in submitted state');
+    bounty.status = 'executing';
+    await this.saveAll([bounty]);
+    return bounty;
+  }
+
   async completeBounty(bountyId: string): Promise<Bounty> {
     const { bounties, bounty, index } = await this.findBounty(bountyId);
 
@@ -349,7 +368,7 @@ export class BountyBoard {
   async failVerification(bountyId: string): Promise<Bounty> {
     const { bounties, bounty, index } = await this.findBounty(bountyId);
 
-    if (bounty.status !== 'verifying') {
+    if (bounty.status !== 'submitted') {
       throw new Error(`Cannot fail verification for bounty in status: ${bounty.status}`);
     }
 

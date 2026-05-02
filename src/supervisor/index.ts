@@ -457,6 +457,10 @@ export class Supervisor extends EventEmitter {
           await this.bountyBoard.submitResult(bounty.id, winner.id, summary, summary);
           console.log("  🏗️ " + winner.id + " executing bounty: " + bounty.title.slice(0,30));
 
+          // Publisher auto-review (simulated — in production, user approves manually)
+          await this.bountyBoard.publisherApprove(bounty.id);
+          
+          // Supervisor review
           if (bounty.verificationTests.length === 0) {
             const result = await this.bountyBoard.runVerification(bounty.id);
             if (result.passed) {
