@@ -37,6 +37,7 @@ interface StatsResponse {
   traitDistribution: Record<string, number>;
   roleDistribution: Record<string, number>;
   fitnessHistory: Array<{ cycle: number; avg: number; max: number; min: number }>;
+  populationHistory: Array<{ cycle: number; count: number }>;
   tokenSupply: number;
   reputationAvg: number;
 }
@@ -244,6 +245,7 @@ const agentsDir = path.join(ecosystemDir, 'agents');
         traitDistribution: {},
         roleDistribution: {},
         fitnessHistory: [],
+        populationHistory: [],
         tokenSupply: 0,
         reputationAvg: 0,
       };
@@ -274,8 +276,9 @@ const agentsDir = path.join(ecosystemDir, 'agents');
       roleDist[role] = (roleDist[role] || 0) + 1;
     }
 
-    // Fitness history from events
+    // Fitness + population history from events
     const fitnessHistory: Array<{ cycle: number; avg: number; max: number; min: number }> = [];
+    const populationHistory: Array<{ cycle: number; count: number }> = [];
     const allEvents: EventLogEntry[] = [];
     for await (const entry of eventLog.replay(0)) {
       allEvents.push(entry);
@@ -288,6 +291,15 @@ const agentsDir = path.join(ecosystemDir, 'agents');
           avg: stats.avg ?? 0,
           max: stats.max ?? 0,
           min: stats.min ?? 0,
+        });
+      }
+      // cycle_end events carry the alive count for that cycle. The supervisor
+      // emits them every cycle (see Supervisor.runCycle), so this gives one
+      // population point per cycle.
+      if (entry.type === 'cycle_end' && typeof entry.data?.aliveCount === 'number') {
+        populationHistory.push({
+          cycle: (entry.data.cycle as number) || 0,
+          count: entry.data.aliveCount as number,
         });
       }
     }
@@ -303,6 +315,7 @@ const agentsDir = path.join(ecosystemDir, 'agents');
       traitDistribution: traitDist,
       roleDistribution: roleDist,
       fitnessHistory,
+      populationHistory,
       tokenSupply: totalTokens,
       reputationAvg: Math.round(repAvg * 100) / 100,
     };
