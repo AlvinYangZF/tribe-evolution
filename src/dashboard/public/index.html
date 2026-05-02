@@ -1112,21 +1112,25 @@ e failed:', err);
 
 // ── Initial Load via REST ──
 async function loadInitialData() {
-  try {
-    const [agents, events, market, stats] = await Promise.all([
-      fetch('/api/agents').then(r => r.json()),
-      fetch('/api/events?limit=50').then(r => r.json()),
-      fetch('/api/market').then(r => r.json()),
-      fetch('/api/stats').then(r => r.json()),
-    ]);
+  // Load each API independently so one failure doesn't block everything
+  const [agentsR, eventsR, statsR] = await Promise.allSettled([
+    fetch('/api/agents').then(r => r.json()).catch(() => []),
+    fetch('/api/events?limit=50').then(r => r.json()).catch(() => []),
+    fetch('/api/stats').then(r => r.json()).catch(() => null),
+  ]);
 
-    updateDashboard({ agents, stats });
-    updateEvents(events);
-    updateMarket(market);
-    loadTree();
-  } catch (err) {
-    console.error('Initial load failed:', err);
+  const agents = agentsR.status === 'fulfilled' ? agentsR.value : [];
+  const events = eventsR.status === 'fulfilled' ? eventsR.value : [];
+  const stats = statsR.status === 'fulfilled' ? statsR.value : {};
+
+  if (agents.length > 0 || stats) {
+    updateDashboard({ agents, stats: stats || {} });
   }
+  updateEvents(events);
+  loadTree();
+
+  // Load market separately (non-critical)
+  fetch('/api/market').then(r => r.json()).then(d => updateMarket(d)).catch(() => {});
 }
 
 // ── WebSocket Connection ──
