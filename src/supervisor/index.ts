@@ -156,8 +156,8 @@ async function decideForAgent(
       aliveCount,
       pendingMessages: 0,
       availableResources: 0,
-      openBounties: await (async () => { try { const b = await bountyBoard.listBounties('open'); return b.length; } catch { return 0; } })(),
-      topBountyReward: await (async () => { try { const o = await bountyBoard.listBounties('open'); return o.length > 0 ? Math.max(...o.map(b => b.reward)) : 0; } catch { return 0; } })(),
+      openBounties: await (async () => { try { const b = await bountyBoard.listBounties(); return b.length; } catch { return 0; } })(),
+      topBountyReward: await (async () => { try { const o = await bountyBoard.listBounties(); return o.length > 0 ? Math.max(...o.map(b => b.reward)) : 0; } catch { return 0; } })(),
     }, llmCall);
 
     // Deduct tokens from agent balance (was previously in a detached module-level Map)
@@ -183,7 +183,7 @@ async function decideForAgent(
     // When agent chooses 'bid_bounty', actually place a bid
     if (decision.action === 'bid_bounty') {
       try {
-        const openBounties = await bountyBoard.listBounties('open');
+        const openBounties = (await bountyBoard.listBounties()).filter((b: any) => b.status === 'open' || b.status === 'bidding');
         if (openBounties.length > 0 && agent.tokenBalance >= 1000) {
           const target = openBounties[Math.floor(Math.random() * openBounties.length)];
           const bidPrice = Math.floor(target.reward * 0.7 * (0.8 + Math.random() * 0.4));
