@@ -14,6 +14,9 @@ import { checkEmailReplies as checkPop3, type EmailReply } from './email-checker
 import { ensureDir, safeWriteJSON } from '../shared/filesystem.js';
 import type { AgentState } from '../shared/types.js';
 
+// Proposal cooldown tracker: agent must wait N cycles between proposals
+const agentLastProposal = new Map<string, number>();
+
 /**
  * Extract a proposal ID from an email reply body or subject.
  * Matches patterns like:
@@ -130,7 +133,15 @@ async function decideForAgent(
     console.log(`  🧠 ${agent.id} (${g.personaName}): ${decision.action} — ${reason}`);
 
     // When agent chooses 'propose', actually create a proposal
+    // Cooldown: only propose every 5 cycles
     if (decision.action === 'propose') {
+      const lastPropose = agentLastProposal.get(agent.id) || 0;
+      if (cycleNum - lastPropose < 5) {
+        // Skip - still in cooldown
+        agent.contributionScore = 10; // base score for trying
+        return;
+      }
+      agentLastProposal.set(agent.id, cycleNum);
       const title = (decision.reasoning ?? '新提案').slice(0, 80);
       try {
         const proposal = await proposalManager.createProposal(agent.id, {

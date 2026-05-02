@@ -1010,147 +1010,58 @@ function fitnessColor(f) {
 }
 
 async function loadTree() {
-  const svg = document.getElementById('tree-svg');
   const container = document.getElementById('tree-container');
-  if (!svg) return;
+  if (!container) return;
   
   try {
     const res = await fetch('/api/tree');
-    if (!res.ok) { svg.innerHTML = ''; return; }
+    if (!res.ok) { container.innerHTML = '<div class="empty-state"><em>' + String.fromCodePoint(0x1F333) + '</em>No tree data</div>'; return; }
     const { nodes } = await res.json();
-    if (!nodes || nodes.length === 0) { svg.innerHTML = '<text x="50%" y="50%" text-anchor="middle" fill="#8b949e" font-size="14">No agents yet</text>'; return; }
+    if (!nodes || nodes.length === 0) { container.innerHTML = '<div class="empty-state"><em>' + String.fromCodePoint(0x1F333) + '</em>No agents yet</div>'; return; }
 
-    // Build tree
     const children = {};
     let roots = [];
     for (const n of nodes) {
-      if (n.parentId === null) roots.push(n);
-      else { if (!children[n.parentId]) children[n.parentId] = []; children[n.parentId].push(n); }
-    }
-
-    // Layout params
-    const cardW = 120, cardH = 44, levelH = 120, hGap = 20, padX = 60, padY = 40;
-    const defs = [];
-
-    // Layout
-    function layoutNodes(nodes, depth, xOff) {
-      let tw = 0, pos = [];
-      for (const n of nodes) {
-        const kids = children[n.id] || [];
-        let sw, cp;
-        if (kids.length === 0) { sw = cardW + hGap; cp = []; }
-        else { const r = layout(kids, depth + 1, 0); cp = r.pos; sw = r.tw; }
-        const nx = cp.length > 0 ? (cp[0].x + cp[cp.length - 1].x) / 2 : sw / 2;
-        pos.push({ n, x: nx + xOff, y: depth * levelH + padY, kids: cp });
-        xOff += sw; tw += sw;
-      }
-      return { pos, tw: Math.max(tw, padX * 2) };
-    }
-
-    const computedLayout = layoutNodes(roots, 0, padX);
-    let md = 0;
-    (function mdepth(ns, d) { for (const p of ns) { md = Math.max(md, d); if (p.kids.length) mdepth(p.kids, d + 1); } })(layout.pos, 0);
-    const svgW = Math.max(computedLayout.tw, 600), svgH = (md + 1) * levelH + padY * 2 + 20;
-    svg.setAttribute('viewBox', "0 0 " + svgW + " " + svgH);
-    svg.setAttribute('width', '100%');
-
-    // Collect all
-    let all = [];
-    (function collect(ps) { for (const p of ps) { all.push(p); if (p.kids.length) collect(p.kids); } })(computedLayout.pos);
-
-    // Gradient defs
-    let defsHtml = '<defs>';
-    for (const p of all) {
-      const c = getColor(p.n.personaName);
-      defsHtml += '<linearGradient id="g' + p.n.id.replace(/[^a-zA-Z0-9]/g,'') + '" x1="0%" y1="0%" x2="100%" y2="100%">';
-      defsHtml += '<stop offset="0%" stop-color="' + c + '" stop-opacity="0.85"/>';
-      defsHtml += '<stop offset="100%" stop-color="' + c + '" stop-opacity="0.6"/>';
-      defsHtml += '</linearGradient>';
-    }
-    defsHtml += '<filter id="shadow"><feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#000" flood-opacity="0.3"/></filter>';
-    defsHtml += '<filter id="glow"><feDropShadow dx="0" dy="0" stdDeviation="4" flood-color="currentColor" flood-opacity="0.2"/></filter>';
-    defsHtml += '</defs>';
-
-    // Lines
-    let lines = '';
-    for (const p of all) {
-      if (!p.kids.length) continue;
-      const my = p.y + cardH;
-      if (p.kids.length === 1) {
-        const k = p.kids[0];
-        lines += '<line class="tree-line" x1="' + p.x + '" y1="' + my + '" x2="' + k.x + '" y2="' + (k.y - 4) + '"/>';
+      if (n.parentId === null || !nodes.some(x => x.id === n.parentId)) {
+        roots.push(n);
       } else {
-        const my2 = my + 15;
-        lines += '<line class="tree-line" x1="' + p.x + '" y1="' + my + '" x2="' + p.x + '" y2="' + my2 + '"/>';
-        const fx = p.kids[0].x, lx = p.kids[p.kids.length-1].x;
-        lines += '<line class="tree-line" x1="' + fx + '" y1="' + my2 + '" x2="' + lx + '" y2="' + my2 + '"/>';
-        for (const k of p.kids) {
-          lines += '<line class="tree-line" x1="' + k.x + '" y1="' + my2 + '" x2="' + k.x + '" y2="' + (k.y - 4) + '"/>';
-        }
+        if (!children[n.parentId]) children[n.parentId] = [];
+        children[n.parentId].push(n);
       }
     }
 
-    // Nodes as cards
-    let svgNodes = '';
-    for (const p of all) {
-      const n = p.n;
-      const c = getColor(n.personaName);
-      const alive = n.alive !== false;
-      const op = alive ? 1 : 0.35;
-      const gradId = 'g' + n.id.replace(/[^a-zA-Z0-9]/g,'');
-      const x = p.x - cardW / 2, y = p.y;
-      const fc = fitnessColor(n.fitness);
-      const shortId = n.id.replace('agent_', 'A');
-
-      svgNodes += '<g class="tree-node" opacity="' + op + '" onclick="showTreeDetail(\'' + n.id + '\',\'' + n.personaName + '\',' + n.generation + ',' + n.fitness + ',' + alive + ')">';
-      // Card background
-      nodes += '<rect x="' + x + '" y="' + y + '" width="' + cardW + '" height="' + cardH + '" rx="8" fill="url(#' + gradId + ')" stroke="' + (alive ? c : '#30363d') + '" stroke-width="' + (alive ? 2 : 1) + '" filter="url(#shadow)"/>';
-      // Fitness bar at bottom
-      const barW = Math.max(4, (n.fitness / 100) * (cardW - 16));
-      nodes += '<rect x="' + (x + 8) + '" y="' + (y + cardH - 8) + '" width="' + barW + '" height="3" rx="1.5" fill="' + fc + '" opacity="0.8"/>';
-      // Role name
-      nodes += '<text x="' + (x + 8) + '" y="' + (y + 17) + '" fill="#fff" font-size="12" font-weight="600">' + n.personaName + '</text>';
-      // ID + fitness
-      nodes += '<text x="' + (x + cardW - 8) + '" y="' + (y + 17) + '" fill="#8b949e" font-size="10" text-anchor="end">' + shortId + '</text>';
-      // Fitness value
-      nodes += '<text x="' + (x + 8) + '" y="' + (y + 32) + '" fill="' + fc + '" font-size="11" font-weight="600">' + (n.fitness ? n.fitness.toFixed(1) : '0') + '</text>';
-      // Gen
-      nodes += '<text x="' + (x + cardW - 8) + '" y="' + (y + 32) + '" fill="#8b949e" font-size="10" text-anchor="end">G' + n.generation + '</text>';
-      nodes += '</g>';
+    function renderNode(node, d) {
+      var c = node.personaName;
+      var color = (ROLE_COLORS_MAP && ROLE_COLORS_MAP[c]) || '#8b949e';
+      var alive = node.alive !== false;
+      var fc = node.fitness > 70 ? '#39d353' : node.fitness > 40 ? '#d29922' : '#f85149';
+      var op = alive ? 1 : 0.4;
+      
+      var div = document.createElement('div');
+      div.className = 'tree-node-card';
+      div.style.cssText = 'display:inline-block;margin:6px 4px;padding:8px 12px;border-radius:8px;background:' + color + '33;border:1.5px solid ' + color + ';opacity:' + op + ';cursor:pointer;min-width:100px;text-align:center;vertical-align:top;font-size:12px';
+      div.innerHTML = '<div style="font-weight:600;color:' + color + '">' + c + '</div><div style="font-size:10px;color:#8b949e">' + node.id.replace('agent_','').slice(0,8) + '</div><div style="font-size:11px;color:' + fc + ';font-weight:600">fit:' + (node.fitness ? node.fitness.toFixed(1) : '0') + '</div><div style="font-size:9px;color:#6e7681">G' + (node.generation || 0) + '</div>';
+      
+      var kids = children[node.id] || [];
+      if (kids.length > 0) {
+        var kd = document.createElement('div');
+        kd.style.cssText = 'margin-left:16px;border-left:1px solid #21262d;padding-left:8px;';
+        kids.forEach(function(k) { kd.appendChild(renderNode(k, d+1)); });
+        div.appendChild(kd);
+      }
+      return div;
     }
 
-    svg.innerHTML = defsHtml + lines + svgNodes;
+    container.innerHTML = '';
+    var wrap = document.createElement('div');
+    wrap.style.cssText = 'padding:12px;overflow-x:auto;';
+    roots.forEach(function(r) { wrap.appendChild(renderNode(r, 0)); });
+    container.appendChild(wrap);
+
   } catch (err) {
     console.error('Tree failed:', err);
   }
 }
-
-function showTreeDetail(id, name, gen, fitness, alive) {
-  const tooltip = document.getElementById('tree-tooltip');
-  if (!tooltip) return;
-  const c = ROLE_COLORS_MAP[name] || '#8b949e';
-  tooltip.innerHTML = '<div class="tt-name">' + name + ' <span class="tt-row">(' + id + ')</span></div>'
-    + '<div class="tt-row"><span class="tt-label">Generation</span> ' + gen + '</div>'
-    + '<div class="tt-row"><span class="tt-label">Fitness</span> <span class="tt-fitness">' + (fitness ? fitness.toFixed(1) : '0') + '</span></div>'
-    + '<div class="tt-row"><span class="tt-label">Status</span> <span class="' + (alive ? 'tt-alive' : 'tt-dead') + '">' + (alive ? '✅ Alive' : '💀 Extinct') + '</span></div>'
-    + '<div style="margin-top:6px"><span class="tt-role-badge" style="background:' + c + '">' + name + '</span></div>';
-  tooltip.classList.add('visible');
-}
-
-function hideTreeTooltip() {
-  const t = document.getElementById('tree-tooltip');
-  if (t) t.classList.remove('visible');
-}
-
-// Track mouse for tooltip positioning
-document.getElementById('tree-container').addEventListener('mousemove', (e) => {
-  const tooltip = document.getElementById('tree-tooltip');
-  if (tooltip.classList.contains('visible')) {
-    const rect = e.currentTarget.getBoundingClientRect();
-    tooltip.style.left = (e.clientX - rect.left + 12) + 'px';
-    tooltip.style.top = (e.clientY - rect.top - 10) + 'px';
-  }
-});
 
 // ── Initial Load via REST ──
 async function loadInitialData() {
