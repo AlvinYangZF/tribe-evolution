@@ -683,15 +683,40 @@
 (function(){
   var qs = new URLSearchParams(location.search);
   var qsApi = qs.get('api');
-  if (qsApi) localStorage.setItem('tribe_api_url', qsApi);
-  var apiUrl = (localStorage.getItem('tribe_api_url') || 'http://localhost:3000').replace(/\/$/, '');
-  // On non-localhost (cpolar/proxy), use relative URLs so web-server proxies API calls
-  var isLocal = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
-  if (!isLocal) apiUrl = '';
+
+  // Broader local-dev detection (localhost, 127.0.0.1, ::1, file://)
+  var host = location.hostname;
+  var isLocal = host === 'localhost' || host === '127.0.0.1' || host === '[::1]' || host === '';
+
+  // On non-localhost (cpolar / cloudflare / public domain), always use
+  // relative URLs so the web-server can proxy /api/* to localhost:3000.
+  // We also clear any stale localStorage entry to prevent accidental
+  // fallback to 'http://localhost:3000' on future reloads.
+  var apiUrl = '';
+  if (isLocal) {
+    if (qsApi) {
+      try { localStorage.setItem('tribe_api_url', qsApi); } catch(e) {}
+    }
+    apiUrl = (localStorage.getItem('tribe_api_url') || 'http://localhost:3000').replace(/\/$/, '');
+  } else {
+    try { localStorage.removeItem('tribe_api_url'); } catch(e) {}
+    // apiUrl stays '' → relative URLs like /api/agents
+  }
+
+  var wsUrl = '';
+  if (isLocal && apiUrl) {
+    wsUrl = apiUrl.replace(/^http/, 'ws') + '/ws';
+  } else {
+    wsUrl = (location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + location.host + '/ws';
+  }
+
   window.TRIBE_CONFIG = {
     apiUrl: apiUrl,
-    wsUrl: isLocal ? apiUrl.replace(/^http/, 'ws') + '/ws' : '',
+    wsUrl: wsUrl,
   };
+
+  // Debug line – visible in mobile browser dev-tools if needed
+  console.log('[TRIBE_CONFIG] host=' + host + ' isLocal=' + isLocal + ' apiUrl=' + (apiUrl || '(relative)') + ' wsUrl=' + wsUrl);
 })();
 if (!sessionStorage.getItem('tribe_token')) { location.href = 'login.html'; }
 </script>
