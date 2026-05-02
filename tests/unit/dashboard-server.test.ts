@@ -181,12 +181,51 @@ describe('Dashboard Server', () => {
     });
   });
 
-  describe('static files', () => {
-    it('serves index.html', async () => {
+  describe('API-only contract', () => {
+    // The HTML/JS frontend lives in `web/` and is served by a separate
+    // process (`npm run web`). The dashboard server is JSON + WebSocket only.
+    it('returns 404 JSON for /', async () => {
       const res = await authedFetch(`${baseUrl}/`);
+      expect(res.status).toBe(404);
+      expect(res.headers.get('content-type')).toMatch(/application\/json/);
+    });
+
+    it('does not set a session cookie on auth-check (frontend stores the token client-side)', async () => {
+      const res = await fetch(`${baseUrl}/auth-check`, {
+        method: 'POST',
+        body: JSON.stringify({ token: 'tribe-admin' }),
+        headers: { 'Content-Type': 'application/json' },
+      });
       expect(res.status).toBe(200);
-      const text = await res.text();
-      expect(text).toContain('Tribe Evolution Dashboard');
+      expect(res.headers.get('set-cookie')).toBeNull();
+      const body = await res.json();
+      expect(body.ok).toBe(true);
+      expect(body.token).toBe('tribe-admin');
+    });
+
+    it('rejects requests without an x-auth-token header (no cookie fallback)', async () => {
+      // Send a session cookie that previously would have authenticated — the
+      // server should ignore it now and return 401.
+      const res = await fetch(`${baseUrl}/api/agents`, {
+        headers: { Cookie: 'tribe_token=tribe-admin' },
+      });
+      expect(res.status).toBe(401);
+    });
+
+    it('sends CORS headers including x-auth-token in Allow-Headers', async () => {
+      const res = await fetch(`${baseUrl}/api/agents`, { method: 'OPTIONS' });
+      expect(res.status).toBe(204);
+      expect(res.headers.get('access-control-allow-origin')).toBe('*');
+      expect((res.headers.get('access-control-allow-headers') || '').toLowerCase())
+        .toContain('x-auth-token');
+    });
+
+    it('CORS headers are present on 401 responses too', async () => {
+      // Browsers drop responses without CORS headers; if we forget them on
+      // 401 the frontend can't see the actual status code.
+      const res = await fetch(`${baseUrl}/api/agents`);
+      expect(res.status).toBe(401);
+      expect(res.headers.get('access-control-allow-origin')).toBe('*');
     });
   });
 

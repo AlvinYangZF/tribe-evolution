@@ -89,9 +89,16 @@ Bounty rewards are funded by the system `Treasury` (`supervisor/treasury.ts`, pe
 
 `shell_test` is **disabled unless `BOUNTY_SHELL_SANDBOX_CMD` is set** (safe-by-default). When set, the value is whitespace-split into argv prefix and prepended to `['sh', '-c', test.command]`. Recommended on Linux: `bwrap --ro-bind / / --tmpfs /tmp --unshare-net --unshare-pid --die-with-parent --`. Tests use `env` as a passthrough.
 
-### Dashboard
+### Dashboard (split frontend / backend)
 
-`dashboard/server.ts` is started lazily by the Supervisor (`port` from `DASHBOARD_PORT`, default 3000). It serves `dashboard/public/index.html`, exposes REST endpoints, and broadcasts snapshots over WebSocket on every `cycleEnd`. It re-reads `ecosystem/agents/*.json` directly — it does not share memory with the Supervisor.
+The dashboard is two processes:
+
+- **API/WebSocket server** — `src/dashboard/server.ts`, started lazily by the Supervisor (`port` from `DASHBOARD_PORT`, default 3000). JSON endpoints under `/api/*`, WebSocket at `/ws`, plus the public `/auth-check` POST. **No HTML serving** — the only non-API route is the 404 fallback. Auth is bearer-token via the `x-auth-token` header (cookie path was removed during the split). CORS headers (`*` origin, allowed headers include `x-auth-token`) are set on every response, including 401, so the browser can read the status.
+- **Static frontend server** — `src/web-server.ts` (`npm run web`, default port 3001). Serves `web/index.html`, `web/login.html` (and any future assets). Pure file server — no API logic.
+
+The frontend resolves the backend URL at runtime via `window.TRIBE_CONFIG.apiUrl`, populated from (in priority): `?api=<url>` query param, `localStorage.tribe_api_url`, or the default `http://localhost:3000`. The validated password is echoed back from `/auth-check` and stored in `sessionStorage.tribe_token`; `index.html`'s `authFetch` sends it on every request. On 401, `authFetch` clears the token and redirects to `login.html`.
+
+The API server still re-reads `ecosystem/agents/*.json` directly — it does not share memory with the Supervisor.
 
 ## Conventions
 
