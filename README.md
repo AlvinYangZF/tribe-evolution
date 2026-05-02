@@ -10,8 +10,11 @@ A single Node.js supervisor process drives a population of LLM-backed agents. Ev
 npm install
 cp .env.example .env       # edit DEEPSEEK_API_KEY at minimum
 npm run seed               # initialize ./ecosystem with 10 agents
-npm start                  # start the supervisor (default 4h cycles)
+npm start                  # start the supervisor + API on http://localhost:3000
+npm run web                # in a separate terminal: serve the dashboard on http://localhost:3001
 ```
+
+Open http://localhost:3001/ and log in (default password `tribe-admin`, override with `DASHBOARD_AUTH_TOKEN`). The frontend talks to the API over CORS using a bearer token in the `x-auth-token` header.
 
 For a debug-friendly 10s cycle loop, use `npm run dev`. For an end-to-end demo of the evolution engine without the supervisor (writes to `./ecosystem-demo`, cleans up after):
 
@@ -19,9 +22,12 @@ For a debug-friendly 10s cycle loop, use `npm run dev`. For an end-to-end demo o
 npx tsx src/demo.ts
 ```
 
+To point the frontend at a non-default backend, use `?api=<url>` once: e.g. `http://localhost:3001/?api=http://my-host:3000` (the URL is remembered in `localStorage`).
+
 ## How it works
 
 - **One supervisor process owns everything.** The Supervisor (`src/supervisor/index.ts`) loads agents from `ecosystem/agents/*.json`, runs cycles via the `Scheduler`, calls `decide()` for each agent in-process via `Promise.allSettled`, and runs `runCycle` from `life-cycle.ts` to evolve the population. There is no per-agent process — `src/agent/index.ts` is an alternative JSON-RPC subprocess shell that the supervisor doesn't currently spawn.
+- **Frontend and backend run as separate processes.** The supervisor exposes a JSON + WebSocket API on port 3000 (`src/dashboard/server.ts` — no HTML serving). The dashboard HTML/JS lives in `web/` and is served by a small static file server (`src/web-server.ts`, `npm run web`). The two communicate over CORS using a bearer token (`x-auth-token`); session cookies were dropped when the frontend was split out.
 - **State lives on disk, not in memory.** Everything under `ecosystem/` is the source of truth: agent JSON files, hash-chained event log, proposal JSONL, bounties JSON, treasury JSON.
 - **Each cycle:** each agent's `decide()` picks an action; the supervisor scores it; `evaluateFitness` ranks the population; `eliminateStepped` removes the bottom by step thresholds; survivors age and (if below `MAX_AGENTS`) reproduce sexually with mutation. Agents die at age 50.
 - **Sexual reproduction.** `DiploidGenome` carries dominant/recessive allele pairs. Reproduction does meiosis on each parent, recombines, then mutates at 15% per gene. Both genders must be present for sexual reproduction; otherwise the cycle falls back to asexual cloning.

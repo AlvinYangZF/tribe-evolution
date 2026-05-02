@@ -7,6 +7,7 @@
     "seed": "tsx src/main.ts seed",
     "start": "tsx src/main.ts",
     "dev": "tsx watch src/main.ts",
+    "web": "tsx src/web-server.ts",
     "test": "vitest run",
     "test:watch": "vitest"
   },
