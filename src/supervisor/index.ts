@@ -166,6 +166,7 @@ async function decideForAgent(
 
     let score = 10;
     if (decision.action === 'bid_bounty') score = 70;
+        else if (decision.action === 'develop_skill') score = 55;
         else if (decision.action === 'web_search') score = 40;
     else if (decision.action === 'write_artifact') score = 50;
     else if (decision.action === 'propose') score = 60;

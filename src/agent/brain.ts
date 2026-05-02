@@ -17,7 +17,7 @@ export type DecisionAction =
   | 'propose'
   | 'lock_resource'
   | 'trade'
-  | 'bid_bounty' | 'idle';
+  | 'bid_bounty' | 'develop_skill' | 'idle';
 
 export const ALL_DECISION_ACTIONS: DecisionAction[] = [
   'web_search',
@@ -27,6 +27,7 @@ export const ALL_DECISION_ACTIONS: DecisionAction[] = [
   'lock_resource',
   'trade',
   'bid_bounty',
+  'develop_skill',
   'idle',
 ];
 
@@ -69,6 +70,7 @@ const ACTION_DESCRIPTIONS: Record<DecisionAction, string> = {
   web_search: '搜索互联网获取新知识',
   write_artifact: '写一份 artifact 供其他 agent 学习',
   bid_bounty: '竞标悬赏任务赚取奖励',
+  develop_skill: '花费Token主动研发一种新技能（调研/实现/工具），立即加入技能库',
   observe: '查看其他 agent 的 artifact，学习他们的行为',
   propose: '向人类用户提建议',
   lock_resource: '抢占一个资源',
