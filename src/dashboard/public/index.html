@@ -1323,118 +1323,109 @@ async function loadTree() {
     const { nodes } = await res.json();
     if (!nodes || nodes.length === 0) { container.innerHTML = '<div class="empty-state"><em>🌳</em>No agents yet</div>'; return; }
 
-    // Re-create the SVG host and tooltip — previous render may have replaced
-    // the container's innerHTML with an empty-state or text card.
     container.innerHTML = '<svg id="tree-svg"></svg><div id="tree-tooltip" class="tree-tooltip"></div>';
     const svg = container.querySelector('#tree-svg');
     const tooltip = container.querySelector('#tree-tooltip');
     const SVG_NS = 'http://www.w3.org/2000/svg';
 
-    // ── Build adjacency ────────────────────────────────────────────────
-    // Primary lineage: parentIds[0] (mother for sexual repro) or parentId.
-    // Co-parents: parentIds[1..] — drawn as dashed edges, no layout effect.
     const byId = {};
     nodes.forEach(n => { byId[n.id] = n; });
-    function primaryParentId(n) {
-      const ids = n.parentIds && n.parentIds.length > 0 ? n.parentIds : (n.parentId ? [n.parentId] : []);
-      const present = ids.find(id => byId[id]);
-      return present || null;
-    }
-    function coParentIds(n) {
-      const ids = (n.parentIds || []).filter(id => byId[id]);
-      const primary = primaryParentId(n);
-      return ids.filter(id => id !== primary);
-    }
 
-    const childrenMap = {};
-    const roots = [];
+    // ── Group nodes by generation ─────────────────────────────────────
+    const byGeneration = {};
+    let maxGen = 0;
     for (const n of nodes) {
-      const p = primaryParentId(n);
-      if (!p) { roots.push(n); continue; }
-      (childrenMap[p] = childrenMap[p] || []).push(n);
+      const g = n.generation || 0;
+      if (!byGeneration[g]) byGeneration[g] = [];
+      byGeneration[g].push(n);
+      if (g > maxGen) maxGen = g;
     }
-    // Stable sort within each parent so layout is deterministic.
-    Object.values(childrenMap).forEach(arr => arr.sort((a, b) => a.id.localeCompare(b.id)));
-    roots.sort((a, b) => (a.generation - b.generation) || a.id.localeCompare(b.id));
 
-    // ── Layout: compute leaf-count per subtree, then position ─────────
+    // Sort each generation deterministically by id
+    for (let g = 0; g <= maxGen; g++) {
+      if (byGeneration[g]) {
+        byGeneration[g].sort((a, b) => a.id.localeCompare(b.id));
+      }
+    }
+
+    // ── Layout constants ──────────────────────────────────────────────
     const NODE_W = 130, NODE_H = 56;
-    const H_GAP = 18;          // horizontal gap between leaf cells
-    const V_GAP = 80;          // vertical gap between generations
-    const MARGIN_X = 24, MARGIN_Y = 24;
+    const H_GAP = 40;          // horizontal gap between sibling nodes
+    const V_GAP = 90;          // vertical gap between generations
+    const MARGIN_X = 40, MARGIN_Y = 30;
 
-    const leafCount = {};
-    function computeLeaves(node) {
-      const kids = childrenMap[node.id] || [];
-      if (kids.length === 0) { leafCount[node.id] = 1; return 1; }
-      const total = kids.reduce((s, k) => s + computeLeaves(k), 0);
-      leafCount[node.id] = total;
-      return total;
-    }
-    roots.forEach(computeLeaves);
+    // Compute width from the widest generation
+    const maxNodesInGen = Math.max(...Object.values(byGeneration).map(arr => arr.length), 1);
+    const genWidth = maxNodesInGen * NODE_W + (maxNodesInGen - 1) * H_GAP;
+    const widthPx = Math.max(800, MARGIN_X * 2 + genWidth);
+    const heightPx = MARGIN_Y * 2 + (maxGen + 1) * V_GAP;
 
-    const positions = {};
-    function place(node, leftCell, depth) {
-      const w = leafCount[node.id];
-      const cx = MARGIN_X + (leftCell + w / 2) * (NODE_W + H_GAP) - (NODE_W + H_GAP) / 2 + NODE_W / 2;
-      const cy = MARGIN_Y + depth * V_GAP + NODE_H / 2;
-      positions[node.id] = { x: cx, y: cy };
-      let cursor = leftCell;
-      const kids = childrenMap[node.id] || [];
-      for (const k of kids) { place(k, cursor, depth + 1); cursor += leafCount[k.id]; }
-    }
-    let cursor = 0;
-    for (const r of roots) { place(r, cursor, 0); cursor += leafCount[r.id]; }
-
-    const totalLeaves = cursor;
-    const maxDepth = Math.max(...nodes.map(n => {
-      let d = 0, cur = n;
-      while (primaryParentId(cur)) { d++; cur = byId[primaryParentId(cur)]; }
-      return d;
-    }), 0);
-    const widthPx = MARGIN_X * 2 + totalLeaves * (NODE_W + H_GAP);
-    const heightPx = MARGIN_Y * 2 + (maxDepth + 1) * V_GAP;
-
-    // Render at native pixel size; the container scrolls when the tree
-    // exceeds the viewport (better than scaling nodes down to unreadable).
     svg.setAttribute('width', String(widthPx));
     svg.setAttribute('height', String(heightPx));
 
-    // ── Draw edges first so nodes overlap them ────────────────────────
+    // ── Compute positions: each generation is a centered horizontal row ─
+    const positions = {};
+    for (let g = 0; g <= maxGen; g++) {
+      const genNodes = byGeneration[g] || [];
+      if (genNodes.length === 0) continue;
+      const genTotalWidth = genNodes.length * NODE_W + (genNodes.length - 1) * H_GAP;
+      const startX = (widthPx - genTotalWidth) / 2;
+      const y = MARGIN_Y + g * V_GAP + NODE_H / 2;
+      genNodes.forEach((n, i) => {
+        const x = startX + i * (NODE_W + H_GAP) + NODE_W / 2;
+        positions[n.id] = { x, y };
+      });
+    }
+
+    // ── Draw edges (parent → child) first ─────────────────────────────
     function curve(p1, p2) {
-      // Cubic Bezier with vertical tangents — looks like a family-tree branch.
       const midY = (p1.y + p2.y) / 2;
       return 'M' + p1.x + ',' + p1.y + ' C' + p1.x + ',' + midY + ' ' + p2.x + ',' + midY + ' ' + p2.x + ',' + p2.y;
     }
-    for (const n of nodes) {
-      const pos = positions[n.id]; if (!pos) continue;
-      const primary = primaryParentId(n);
-      if (primary) {
-        const pp = positions[primary]; if (!pp) continue;
-        const p = document.createElementNS(SVG_NS, 'path');
-        p.setAttribute('d', curve({ x: pp.x, y: pp.y + NODE_H / 2 }, { x: pos.x, y: pos.y - NODE_H / 2 }));
-        p.setAttribute('stroke', '#30363d');
-        p.setAttribute('stroke-width', '1.5');
-        p.setAttribute('fill', 'none');
-        svg.appendChild(p);
-      }
-      for (const co of coParentIds(n)) {
-        const cp = positions[co]; if (!cp) continue;
-        const p = document.createElementNS(SVG_NS, 'path');
-        p.setAttribute('d', curve({ x: cp.x, y: cp.y + NODE_H / 2 }, { x: pos.x, y: pos.y - NODE_H / 2 }));
-        p.setAttribute('stroke', '#8b949e');
-        p.setAttribute('stroke-width', '1');
-        p.setAttribute('stroke-dasharray', '3,3');
-        p.setAttribute('fill', 'none');
-        p.setAttribute('opacity', '0.6');
-        svg.appendChild(p);
+
+    for (let g = 1; g <= maxGen; g++) {
+      const genNodes = byGeneration[g] || [];
+      for (const n of genNodes) {
+        const pos = positions[n.id];
+        if (!pos) continue;
+
+        const parentIds = n.parentIds && n.parentIds.length > 0
+          ? n.parentIds
+          : (n.parentId ? [n.parentId] : []);
+
+        let primaryDrawn = false;
+        for (const pid of parentIds) {
+          const pPos = positions[pid];
+          if (!pPos) continue;
+
+          const p = document.createElementNS(SVG_NS, 'path');
+          p.setAttribute('d', curve(
+            { x: pPos.x, y: pPos.y + NODE_H / 2 },
+            { x: pos.x, y: pos.y - NODE_H / 2 }
+          ));
+
+          if (!primaryDrawn) {
+            p.setAttribute('stroke', '#30363d');
+            p.setAttribute('stroke-width', '1.5');
+            p.setAttribute('fill', 'none');
+            primaryDrawn = true;
+          } else {
+            p.setAttribute('stroke', '#8b949e');
+            p.setAttribute('stroke-width', '1');
+            p.setAttribute('stroke-dasharray', '3,3');
+            p.setAttribute('fill', 'none');
+            p.setAttribute('opacity', '0.6');
+          }
+          svg.appendChild(p);
+        }
       }
     }
 
     // ── Draw nodes ────────────────────────────────────────────────────
     function shortId(id) { return (id || '').replace('agent_', '').slice(0, 8); }
     for (const n of nodes) {
-      const pos = positions[n.id]; if (!pos) continue;
+      const pos = positions[n.id];
+      if (!pos) continue;
       const role = n.personaName || 'Unknown';
       const color = ROLE_COLORS_MAP[role] || '#8b949e';
       const alive = n.alive !== false;
