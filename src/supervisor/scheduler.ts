@@ -31,7 +31,8 @@ export class Scheduler extends EventEmitter {
     if (this.running) return;
     this.running = true;
     this.callback = callback;
-    this.scheduleNext();
+    // Fire first cycle immediately, then wait interval for subsequent
+    this.runCycle();
   }
 
   /**
