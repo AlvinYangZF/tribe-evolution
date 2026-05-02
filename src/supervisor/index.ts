@@ -8,12 +8,14 @@ import { runCycle as runLifeCycle } from './life-cycle.js';
 import { notifyUser, type NotifyConfig } from './notify.js';
 import { decide } from '../agent/brain.js';
 import { proxyCall } from './llm-proxy.js';
-import { genomeToSystemPrompt } from '../agent/genome.js';
+import { genomeToSystemPrompt, expressGenome, expressedToGenome } from '../agent/genome.js';
 import type { Config } from '../config/index.js';
 import { checkEmailReplies as checkPop3, type EmailReply } from './email-checker.js';
 import { ensureDir, safeWriteJSON } from '../shared/filesystem.js';
 import { BountyBoard } from './bounty-board.js';
-import type { AgentState } from '../shared/types.js';
+import type { AgentState, SkillName } from '../shared/types.js';
+
+const ALL_SKILL_NAMES: SkillName[] = ['web_search', 'code_write', 'data_analyze', 'artifact_write', 'observe', 'propose'];
 
 // Proposal cooldown tracker: agent must wait N cycles between proposals
 const agentLastProposal = new Map<string, number>();
@@ -201,26 +203,29 @@ async function decideForAgent(
       }
     }
 
-    // When agent chooses 'develop_skill', research a new skill
+    // When agent chooses 'develop_skill', train one of its existing skills.
+    // The bump is applied to the diploid genome (random allele) so the gain
+    // is heritable through reproduction; the haploid `genome` is then
+    // re-expressed to keep the two views in sync.
     if (decision.action === 'develop_skill') {
-      const skillTypes = ['research', 'implement', 'tool'];
-      const type = skillTypes[Math.floor(Math.random() * skillTypes.length)];
-      const newSkills = {
-        research: ['deep_research', 'trend_analysis', 'knowledge_synthesis'],
-        implement: ['code_generation', 'system_design', 'auto_debug'],
-        tool: ['web_automation', 'data_scraping', 'api_integration'],
-      };
-      const skillName = newSkills[type as keyof typeof newSkills][Math.floor(Math.random() * newSkills[type as keyof typeof newSkills].length)];
       const cost = 5000;
-      if (agent.tokenBalance >= cost) {
-        agent.tokenBalance -= cost;
-        agent.genome.skills = agent.genome.skills || {};
-        (agent.genome.skills as Record<string, number>)[skillName] = ((agent.genome.skills as Record<string, number>)[skillName] || 0.3) + 0.2;
-        agent.contributionScore += 20;
-        console.log('  🔬 ' + agent.id + ' developed ' + type + ' skill: ' + skillName);
-        await saveAgent(agent);
-      } else {
+      if (agent.tokenBalance < cost) {
         agent.contributionScore = 10;
+      } else if (!agent.diploidGenome) {
+        // Defensive: pre-diploid agents shouldn't exist after seed, but skip
+        // rather than corrupt state.
+        agent.contributionScore = 10;
+      } else {
+        agent.tokenBalance -= cost;
+        const skill = ALL_SKILL_NAMES[Math.floor(Math.random() * ALL_SKILL_NAMES.length)];
+        const allele: 'dominant' | 'recessive' = Math.random() < 0.5 ? 'dominant' : 'recessive';
+        const before = agent.diploidGenome.skills[skill][allele];
+        agent.diploidGenome.skills[skill][allele] = Math.min(1, before + 0.2);
+        const expressed = expressGenome(agent.diploidGenome);
+        agent.genome = expressedToGenome(expressed);
+        agent.contributionScore += 20;
+        console.log(`  🔬 ${agent.id} trained ${skill} (${allele}: ${before.toFixed(2)} → ${agent.diploidGenome.skills[skill][allele].toFixed(2)})`);
+        await saveAgent(agent);
       }
     }
 
@@ -467,19 +472,22 @@ export class Supervisor extends EventEmitter {
         await this.bountyBoard.submitResult(bounty.id, winner.id, summary, summary);
         console.log("  🏗️ " + winner.id + " executing bounty: " + bounty.title.slice(0,30));
 
-        // Publisher auto-review (simulated — in production, user approves manually)
+        // Two-tier review (auto-simulated — in production, the publisher and
+        // the supervisor agent each approve via the dashboard).
         await this.bountyBoard.publisherApprove(bounty.id);
+        await this.bountyBoard.supervisorApprove(bounty.id);
 
-        // Supervisor review
-        if (bounty.verificationTests.length === 0) {
-          const result = await this.bountyBoard.runVerification(bounty.id);
-          if (result.passed) {
-            await this.bountyBoard.completeBounty(bounty.id);
-            winner.tokenBalance += bounty.reward;
-            await this.saveAgent(winner);
-            console.log("  ✅ Bounty completed! " + winner.id + " earned " + bounty.reward + " tokens");
-            await this.eventLog.append({ type: 'task_completed', agentId: winner.id, data: { action: 'bounty_completed', bountyId: bounty.id, reward: bounty.reward } });
-          }
+        // Run verification (no-op when verificationTests is empty → passes)
+        const result = await this.bountyBoard.runVerification(bounty.id);
+        if (result.passed) {
+          await this.bountyBoard.completeBounty(bounty.id);
+          winner.tokenBalance += bounty.reward;
+          await this.saveAgent(winner);
+          console.log("  ✅ Bounty completed! " + winner.id + " earned " + bounty.reward + " tokens");
+          await this.eventLog.append({ type: 'task_completed', agentId: winner.id, data: { action: 'bounty_completed', bountyId: bounty.id, reward: bounty.reward } });
+        } else {
+          await this.bountyBoard.failVerification(bounty.id);
+          console.log("  ❌ Bounty verification failed: " + bounty.title.slice(0,30) + " (" + result.results.join('; ').slice(0,80) + ")");
         }
       } catch (err: unknown) {
         const m = err instanceof Error ? err.message : String(err);

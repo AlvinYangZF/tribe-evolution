@@ -1,7 +1,12 @@
 /**
  * BountyBoard — Bounty 悬赏系统
  *
- * Manages bounty lifecycle: open → bidding → awarded → executing → verifying → completed
+ * Manages bounty lifecycle:
+ *   open → bidding → awarded → executing → submitted
+ *        → publisher_review → supervisor_review → completed
+ * Either review tier can reject back to `executing` (retry) and the
+ * supervisor tier can also exhaust retries, reverting the bounty to `open`.
+ *
  * Persisted as JSON in ecosystem/bounties/bounties.json
  * Agent token balances are managed via ecosystem/agents/{agentId}.json
  */
@@ -327,7 +332,7 @@ export class BountyBoard {
 
   async publisherApprove(bountyId: string): Promise<Bounty> {
     const { bounties, bounty, index } = await this.findBounty(bountyId);
-    if (bounty.status !== 'submitted') throw new Error('Must be in submitted state');
+    assertTransition(bounty.status, 'publisher_review');
     const updated: Bounty = { ...bounty, status: 'publisher_review' };
     bounties[index] = updated;
     await this.saveAll(bounties);
@@ -336,6 +341,23 @@ export class BountyBoard {
   async publisherReject(bountyId: string): Promise<Bounty> {
     const { bounties, bounty, index } = await this.findBounty(bountyId);
     if (bounty.status !== 'submitted') throw new Error('Must be in submitted state');
+    const updated: Bounty = { ...bounty, status: 'executing' };
+    bounties[index] = updated;
+    await this.saveAll(bounties);
+    return updated;
+  }
+
+  async supervisorApprove(bountyId: string): Promise<Bounty> {
+    const { bounties, bounty, index } = await this.findBounty(bountyId);
+    assertTransition(bounty.status, 'supervisor_review');
+    const updated: Bounty = { ...bounty, status: 'supervisor_review' };
+    bounties[index] = updated;
+    await this.saveAll(bounties);
+    return updated;
+  }
+  async supervisorReject(bountyId: string): Promise<Bounty> {
+    const { bounties, bounty, index } = await this.findBounty(bountyId);
+    if (bounty.status !== 'publisher_review') throw new Error('Must be in publisher_review state');
     const updated: Bounty = { ...bounty, status: 'executing' };
     bounties[index] = updated;
     await this.saveAll(bounties);
@@ -368,7 +390,10 @@ export class BountyBoard {
   async failVerification(bountyId: string): Promise<Bounty> {
     const { bounties, bounty, index } = await this.findBounty(bountyId);
 
-    if (bounty.status !== 'submitted') {
+    // Verification can fail at any review tier — either tier can reject back
+    // to `executing`, and the supervisor tier can also exhaust retries.
+    const reviewStates: BountyStatus[] = ['submitted', 'publisher_review', 'supervisor_review'];
+    if (!reviewStates.includes(bounty.status)) {
       throw new Error(`Cannot fail verification for bounty in status: ${bounty.status}`);
     }
 

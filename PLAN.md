@@ -93,15 +93,16 @@ Pure, reversible fixes that surface the rest of the bugs.
 
 Result: 18/18 life-cycle tests pass. Pre-existing failures (C9, C10) deferred to PR-2 / PR-7.
 
-### PR-2: bounty flow correctness
+### PR-2: bounty flow correctness — ✅ DONE
 
-Fixes A5, A6, and the `develop_skill` heritability bug.
+Fixes A5, A6, C9.
 
-- Decide on the bounty state machine (single-tier vs two-tier review). **Open question for the user.**
-- Wire `develop_skill` through the diploid genome so new skills survive reproduction.
-- Add a full lifecycle test: create → bid → award → submit → review → complete.
+- ✅ Two-tier review confirmed by user. Added `supervisorApprove` (publisher_review → supervisor_review) and `supervisorReject` (publisher_review → executing) on `BountyBoard`. `publisherApprove` now uses `assertTransition` like the rest. `failVerification` accepts any of the three review states (submitted, publisher_review, supervisor_review) so a failure at any tier still routes through the retry/penalty logic.
+- ✅ `processBountyExecutions` now walks the full path: submit → publisherApprove → supervisorApprove → runVerification → completeBounty (or failVerification on a failed test). Bounty completion is reachable for the first time since the two-tier states landed.
+- ✅ `develop_skill` rewritten to bump one of the agent's existing `SkillName` values via `diploidGenome.skills` (random allele); the haploid `genome` is then re-expressed. Skill gain now survives reproduction.
+- ✅ `bounty-board.test.ts` updated to walk through both review tiers; new test exercises both rejection paths.
 
-Estimated effort: half a day. Risk: medium (touches gameplay loop).
+Result: 213/213 non-dashboard tests pass. C9 cleared.
 
 ### PR-3: token-economy invariants
 

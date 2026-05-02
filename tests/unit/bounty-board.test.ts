@@ -161,6 +161,8 @@ describe('BountyBoard', () => {
     const bid2 = await board.placeBid(b2.id, 'winner_filter', 200, 'Plan');
     await board.awardBid(b2.id, bid2.id);
     await board.submitResult(b2.id, 'winner_filter', 'http://a', 'Done');
+    await board.publisherApprove(b2.id);
+    await board.supervisorApprove(b2.id);
     await board.completeBounty(b2.id);
 
     const openBounties = await board.listBounties('open');
@@ -286,7 +288,7 @@ describe('BountyBoard', () => {
 
   // ─── submitResult ──────────────────────────────────────────────────────
 
-  it('should change status to verifying after submission', async () => {
+  it('should change status to submitted after submission', async () => {
     const creator = makeAgent('creator_b', 10000);
     const winner = makeAgent('winner_b', 5000);
     await writeAgent(tempDir, creator);
@@ -308,7 +310,7 @@ describe('BountyBoard', () => {
 
     const submitted = await board.submitResult(bounty.id, 'winner_b', 'http://artifact', 'Done!');
 
-    expect(submitted.status).toBe('verifying');
+    expect(submitted.status).toBe('submitted');
   });
 
   it('should reject submission from wrong agent', async () => {
@@ -337,16 +339,13 @@ describe('BountyBoard', () => {
 
   // ─── runVerification + completeBounty (full lifecycle) ─────────────────
 
-  it('should complete full lifecycle: open → bidding → awarded → executing → verifying → completed', async () => {
+  it('should complete full lifecycle: open → bidding → awarded → submitted → publisher_review → supervisor_review → completed', async () => {
     const creator = makeAgent('creator_full', 10000);
     const bidder = makeAgent('bidder_full', 5000);
     const verifier = makeAgent('verifier_full', 1000);
     await writeAgent(tempDir, creator);
     await writeAgent(tempDir, bidder);
     await writeAgent(tempDir, verifier);
-
-    const beforeCreator = (await readAgent(tempDir, 'creator_full'))!;
-    const beforeBidder = (await readAgent(tempDir, 'bidder_full'))!;
 
     // Step 1: Create
     const bounty = await board.createBounty({
@@ -358,7 +357,6 @@ describe('BountyBoard', () => {
       deadline: Date.now() + 86400000,
       depositRate: 0.5,
       verifierAgentId: 'verifier_full',
-      verificationTests: [{ type: 'file_check', description: 'Check artifact exists', filePath: '/tmp/test_artifact', expectedContent: 'done' }],
     });
     expect(bounty.status).toBe('open');
 
@@ -370,11 +368,19 @@ describe('BountyBoard', () => {
     const awarded = await board.awardBid(bounty.id, bid.id);
     expect(awarded.status).toBe('awarded');
 
-    // Step 4: Submit (transitions to verifying)
+    // Step 4: Submit (transitions to submitted)
     const submitted = await board.submitResult(bounty.id, 'bidder_full', 'http://artifact', 'Fixed!');
-    expect(submitted.status).toBe('verifying');
+    expect(submitted.status).toBe('submitted');
 
-    // Step 5: Complete
+    // Step 5: Publisher tier
+    const publisherReviewed = await board.publisherApprove(bounty.id);
+    expect(publisherReviewed.status).toBe('publisher_review');
+
+    // Step 6: Supervisor tier
+    const supervisorReviewed = await board.supervisorApprove(bounty.id);
+    expect(supervisorReviewed.status).toBe('supervisor_review');
+
+    // Step 7: Complete
     const completed = await board.completeBounty(bounty.id);
     expect(completed.status).toBe('completed');
     expect(completed.completedAt).not.toBeNull();
@@ -384,6 +390,43 @@ describe('BountyBoard', () => {
     // Winner gets 1000 added back from escrow
     const afterBidder = await readAgent(tempDir, 'bidder_full');
     expect(afterBidder!.tokenBalance).toBe(5000 - 500 + 1000); // 5500
+  });
+
+  it('should walk through both review tiers, with rejection at either tier sending back to executing', async () => {
+    const creator = makeAgent('creator_review', 10000);
+    const winner = makeAgent('winner_review', 5000);
+    await writeAgent(tempDir, creator);
+    await writeAgent(tempDir, winner);
+
+    const bounty = await board.createBounty({
+      title: 'Review test',
+      description: 'Desc',
+      creatorId: 'creator_review',
+      type: 'bug_fix',
+      reward: 1000,
+      deadline: Date.now() + 86400000,
+      depositRate: 0.5,
+    });
+    const bid = await board.placeBid(bounty.id, 'winner_review', 800, 'Plan');
+    await board.awardBid(bounty.id, bid.id);
+
+    // Round 1: publisher rejects → back to executing
+    await board.submitResult(bounty.id, 'winner_review', 'http://a1', 'r1');
+    const pubRejected = await board.publisherReject(bounty.id);
+    expect(pubRejected.status).toBe('executing');
+
+    // Round 2: publisher approves, supervisor rejects → back to executing
+    await board.submitResult(bounty.id, 'winner_review', 'http://a2', 'r2');
+    await board.publisherApprove(bounty.id);
+    const supRejected = await board.supervisorReject(bounty.id);
+    expect(supRejected.status).toBe('executing');
+
+    // Round 3: both approve → complete
+    await board.submitResult(bounty.id, 'winner_review', 'http://a3', 'r3');
+    await board.publisherApprove(bounty.id);
+    await board.supervisorApprove(bounty.id);
+    const completed = await board.completeBounty(bounty.id);
+    expect(completed.status).toBe('completed');
   });
 
   // ─── failVerification ──────────────────────────────────────────────────
