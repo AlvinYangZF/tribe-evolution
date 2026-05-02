@@ -67,6 +67,33 @@ interface TreeAgentNode {
 export function startDashboard(ecosystemDir: string, port: number = 3000) {
   const eventLog = new EventLog(ecosystemDir);
   
+
+// ── Rate Limiting ──
+const loginAttempts = new Map();
+function checkRateLimit(ip: any) {
+  const now = Date.now();
+  const entry = loginAttempts.get(ip);
+  if (!entry) return { allowed: true, waitSeconds: 0 };
+  if (entry.lockedUntil > 0 && now < entry.lockedUntil) {
+    return { allowed: false, waitSeconds: Math.ceil((entry.lockedUntil - now) / 1000) };
+  }
+  if (entry.lockedUntil > 0 && now >= entry.lockedUntil) {
+    loginAttempts.delete(ip);
+    return { allowed: true, waitSeconds: 0 };
+  }
+  return { allowed: true, waitSeconds: 0 };
+}
+function recordFailure(ip: any) {
+  const entry = loginAttempts.get(ip) || { count: 0, lockedUntil: 0 };
+  entry.count++;
+  if (entry.count >= 3) {
+    entry.lockedUntil = Date.now() + 30000 * Math.pow(2, entry.count - 3);
+  }
+  loginAttempts.set(ip, entry);
+  return entry;
+}
+function recordSuccess(ip: any) { loginAttempts.delete(ip); }
+
 // ── Auth Middleware ──
 const AUTH_TOKEN = process.env.DASHBOARD_AUTH_TOKEN || 'tribe-admin';
 function authMiddleware(req: any, res: any, next: any) {
