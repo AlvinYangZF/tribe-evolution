@@ -320,5 +320,49 @@ describe('life-cycle', () => {
       // Agents age 50+ should be marked dead
       expect(alive.every(a => a.age <= 49)).toBe(true);
     });
+
+    it('should return dead-of-age agents so caller can persist their death', () => {
+      // Regression: previously, age>=50 agents were flipped alive=false in
+      // memory but dropped from the return value, so the supervisor never
+      // saved their death to disk and they revived next cycle as zombies.
+      const agents = [1, 2, 3, 4].map(i =>
+        makeAgent(`old${i}`, {
+          age: 60,
+          contributionScore: 10,
+          reputation: 0.5,
+          protectionRounds: 0,
+          diploidGenome: makeDiploidGenome(i % 2 === 0 ? 'male' : 'female'),
+        })
+      );
+      const result = runCycle(agents, 1);
+      const inputIds = new Set(agents.map(a => a.id));
+      const returnedInputs = result.filter(a => inputIds.has(a.id));
+      // Every old agent must appear in the return, marked dead.
+      expect(returnedInputs).toHaveLength(agents.length);
+      expect(returnedInputs.every(a => a.alive === false)).toBe(true);
+    });
+
+    it('should return eliminated low-fitness agents (population-based culling)', () => {
+      // 30 agents triggers elimination of 5 by eliminateStepped. All 30
+      // must still appear in the return — survivors as alive, eliminated
+      // as alive=false — so the supervisor can flush their death to disk.
+      const agents = Array.from({ length: 30 }, (_, i) =>
+        makeAgent(`a${i}`, {
+          age: 5,
+          contributionScore: i, // varying fitness
+          reputation: 0.5,
+          protectionRounds: 0,
+          diploidGenome: makeDiploidGenome(i % 2 === 0 ? 'male' : 'female'),
+        })
+      );
+      const result = runCycle(agents, 1);
+      const inputIds = new Set(agents.map(a => a.id));
+      const returnedInputs = result.filter(a => inputIds.has(a.id));
+      // No input agent should be silently dropped.
+      expect(returnedInputs).toHaveLength(agents.length);
+      const dead = returnedInputs.filter(a => !a.alive);
+      // eliminateStepped removes 5 at population 30.
+      expect(dead.length).toBeGreaterThanOrEqual(5);
+    });
   });
 });
