@@ -1557,11 +1557,15 @@ async function loadTree() {
       });
     }
 
-    // Draw edges (Bezier)
+    // Draw edges (Bezier). Color the primary lineage edge in the child's
+    // role color so each branch is visually distinct against the dark
+    // background. Co-parent edges stay subtle and dashed so the eye knows
+    // which lineage is the "main" one.
     for (let d = 1; d <= maxDepth; d++) {
       for (const n of (byDepth[d] || [])) {
         const pos = positions[n.id];
         if (!pos) continue;
+        const childColor = ROLE_COLORS_MAP[n.personaName] || '#8b949e';
         const pids = (n.parentIds && n.parentIds.length) ? n.parentIds : (n.parentId ? [n.parentId] : []);
         let first = true;
         for (const pid of pids) {
@@ -1570,9 +1574,11 @@ async function loadTree() {
           const p = document.createElementNS(SVG_NS, 'path');
           const midY = (pp.y + NODE_H + pos.y) / 2;
           p.setAttribute('d', 'M' + (pp.x + NODE_W/2) + ',' + (pp.y + NODE_H) + ' C' + (pp.x + NODE_W/2) + ',' + midY + ' ' + (pos.x + NODE_W/2) + ',' + midY + ' ' + (pos.x + NODE_W/2) + ',' + pos.y);
-          p.setAttribute('stroke', first ? '#30363d' : '#8b949e');
-          p.setAttribute('stroke-width', first ? '1.5' : '1');
-          if (!first) p.setAttribute('stroke-dasharray', '3,3');
+          p.setAttribute('stroke', first ? childColor : '#8b949e');
+          p.setAttribute('stroke-width', first ? '2' : '1.2');
+          p.setAttribute('stroke-opacity', first ? '0.75' : '0.55');
+          p.setAttribute('stroke-linecap', 'round');
+          if (!first) p.setAttribute('stroke-dasharray', '4,4');
           p.setAttribute('fill', 'none');
           svg.appendChild(p);
           first = false;
