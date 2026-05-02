@@ -5,6 +5,7 @@
  * All credentials come from the caller — nothing hardcoded.
  */
 import nodemailer from 'nodemailer';
+import { computeApprovalToken } from './email-approval.js';
 
 export interface NotifyConfig {
   smtpHost: string;
@@ -12,6 +13,9 @@ export interface NotifyConfig {
   emailUser: string;
   emailPass: string;
   notifyEmail: string;
+  /** HMAC secret for email-approval tokens. When empty, the email body
+   *  notes that email approval is disabled. */
+  emailApprovalSecret?: string;
 }
 
 export interface AgentMessage {
@@ -46,6 +50,16 @@ export async function notifyUser(cfg: NotifyConfig, msg: AgentMessage): Promise<
   }
 
   const subject = `🤖 [${msg.agentId}] ${msg.title}`;
+  // With a secret + proposalId, derive the approval HMAC and embed it in the
+  // reply instructions. Without either, render a "disabled" note so an
+  // operator doesn't expect their reply to take effect.
+  const approvalToken = (cfg.emailApprovalSecret && msg.proposalId)
+    ? computeApprovalToken(msg.proposalId, cfg.emailApprovalSecret)
+    : null;
+  const replyInstruction = approvalToken && msg.proposalId
+    ? `回复 "approve ${msg.proposalId} ${approvalToken}" 或 "reject ${msg.proposalId} ${approvalToken} <原因>" 来审批\nApproval token: ${approvalToken}`
+    : '邮件审批未启用（未配置 EMAIL_APPROVAL_SECRET）。请通过 dashboard 审批。';
+
   const body = [
     `来自 Agent: ${msg.agentId}`,
     `类型: ${msg.type}`,
@@ -54,7 +68,7 @@ export async function notifyUser(cfg: NotifyConfig, msg: AgentMessage): Promise<
     msg.tokenCost ? `\nToken 成本: ${msg.tokenCost}` : '',
     msg.proposalId ? `\nProposal ID: ${msg.proposalId}` : '',
     '\n---',
-    '回复 "approve <proposalId>" 或 "reject <proposalId> <原因>" 来审批',
+    replyInstruction,
   ].join('\n');
 
   try {

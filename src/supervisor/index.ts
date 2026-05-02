@@ -10,7 +10,8 @@ import { decide } from '../agent/brain.js';
 import { proxyCall } from '../shared/llm.js';
 import { genomeToSystemPrompt, expressGenome, expressedToGenome } from '../agent/genome.js';
 import type { Config } from '../config/index.js';
-import { checkEmailReplies as checkPop3, type EmailReply } from './email-checker.js';
+import { checkEmailReplies as checkPop3 } from './email-checker.js';
+import { classifyReply } from './email-approval.js';
 import { ensureDir, safeWriteJSON } from '../shared/filesystem.js';
 import { BountyBoard } from './bounty-board.js';
 import { Treasury } from './treasury.js';
@@ -59,57 +60,7 @@ function evaluateProposal(proposal: { title: string; description: string; agentI
   return { action: 'approve', reason: '提案格式和内容合格' };
 }
 
-/**
- * Extract a proposal ID from an email reply body or subject.
- * Matches patterns like:
- *   - "approve prop_xxx"
- *   - "reject <uuid>"
- *   - "批准 <uuid>"
- *   - Subject lines containing a UUID
- */
-function extractProposalId(text: string): string | null {
-  // Match UUID pattern
-  const uuidRe = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
-  const m = text.match(uuidRe);
-  return m ? m[0] : null;
-}
-
-/**
- * Determine if an email reply is an approval or rejection,
- * and extract the target proposalId.
- */
-function classifyReply(reply: EmailReply): {
-  action: 'approve' | 'reject' | null;
-  proposalId: string | null;
-  reason: string;
-} {
-  const body = reply.body.trim();
-  const bodyLower = body.toLowerCase();
-  const subject = reply.subject;
-
-  // Try to extract proposal ID from body + subject
-  const proposalId = extractProposalId(body) ?? extractProposalId(subject);
-
-  const approved =
-    bodyLower.startsWith('approve') ||
-    bodyLower.startsWith('同意') ||
-    bodyLower.startsWith('批准');
-  const rejected =
-    bodyLower.startsWith('reject') ||
-    bodyLower.startsWith('拒绝') ||
-    bodyLower.startsWith('不同意');
-
-  if (approved) return { action: 'approve', proposalId, reason: '' };
-  if (rejected) {
-    const reason = body
-      .replace(/^(reject|拒绝|不同意)\s*/i, '')
-      .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\s*/i, '')
-      .trim() || '用户拒绝';
-    return { action: 'reject', proposalId, reason };
-  }
-
-  return { action: null, proposalId: null, reason: '' };
-}
+// Email reply parsing and HMAC verification live in ./email-approval.ts.
 
 /**
  * Make an LLM-powered decision for a single agent.
@@ -329,6 +280,7 @@ export class Supervisor extends EventEmitter {
       emailUser: this.config.emailUser,
       emailPass: this.config.emailPass,
       notifyEmail: this.config.notifyEmail,
+      emailApprovalSecret: this.config.emailApprovalSecret,
     };
   }
 
@@ -588,11 +540,13 @@ export class Supervisor extends EventEmitter {
       if (replies.length === 0) return;
 
       for (const reply of replies) {
-        const { action, proposalId, reason } = classifyReply(reply);
+        const { action, proposalId, reason, rejectionReason } = classifyReply(reply, this.config.emailApprovalSecret);
 
         if (!action || !proposalId) {
-          // No actionable command or no proposal ID found — skip
-          console.log(`  📧 Email skipped (no matching proposal ID): "${reply.subject}"`);
+          // No actionable command, no proposal id, or no valid HMAC token —
+          // log the why and move on. Without a token, the reply is purely
+          // informational; the operator should approve via the dashboard.
+          console.log(`  📧 Email skipped: "${reply.subject}" (${rejectionReason ?? 'no action'})`);
           continue;
         }
 

@@ -144,9 +144,17 @@ User decided to sandbox `shell_test` rather than drop it.
 
 - ✅ A1 — `shell_test` is now disabled unless `BOUNTY_SHELL_SANDBOX_CMD` is set (safe-by-default). When set, the value is whitespace-split into argv prefix and prepended to `['sh', '-c', test.command]`, then exec'd via `execFileSync` (no shell interpretation of the sandbox prefix itself). Recommended values for production are documented in `.env.example` (`bwrap --ro-bind / / --tmpfs /tmp --unshare-net ...`). The pre-existing `execSync(test.command)` was a straightforward RCE — anyone (including agents) posting a bounty could have shell access to the host.
 - ✅ Tests: existing shell_test test updated to set `BOUNTY_SHELL_SANDBOX_CMD=env` (universal no-op passthrough). New test asserts safe-by-default — shell_test fails without the sandbox env var.
-- ⏭ A2 (email approval auth) — **still waiting for user input**. The email-reply path uses substring-match on the `From:` header, which is trivially spoofable. Two options:
-  - **HMAC**: include a signed token in the proposal email body, verify on parse.
-  - **Retire email**: rely on the dashboard's auth (which landed recently) for human-in-the-loop approval.
+- ✅ A2 — done in PR-9 (HMAC chosen; preserves the inbox-approval workflow).
+
+### PR-9: email approval HMAC — ✅ DONE (A2)
+
+- ✅ New module `src/supervisor/email-approval.ts` with `extractProposalId`, `computeApprovalToken` (HMAC-SHA256, truncated to 16 hex chars), and `classifyReply(reply, secret)`. The previous in-`supervisor/index.ts` implementation only matched `From:` substring + a UUID — trivially spoofable.
+- ✅ `classifyReply` requires the body to contain a token whose HMAC matches the proposalId under the configured secret. Without a valid token the reply is logged with a `rejectionReason` and ignored.
+- ✅ Email approval is **disabled by default** — `EMAIL_APPROVAL_SECRET` unset → no reply ever takes effect. Notification emails render an explanatory note instead of a token. Documented in `.env.example`.
+- ✅ `NotifyConfig` learned `emailApprovalSecret`; `notifyUser` derives the per-proposal token internally so callers don't have to compute the HMAC.
+- ✅ `email-security.test.ts` rewritten to import the real module instead of inlining a copy. New tests cover: matching token approval/reject, missing token, wrong token, secret mismatch, disabled-by-default, and proposal-id-from-subject.
+
+Result: 254/254 tests pass.
 
 ### PR-7: performance & polish — partial
 

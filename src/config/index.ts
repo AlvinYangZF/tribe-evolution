@@ -26,6 +26,9 @@ export interface Config {
   bountyVerifierAgentId: string;
   bountyDepositRate: number;
   bountyMaxRetries: number;
+  // Shared secret for email-approval HMAC. When empty, email approval is
+  // disabled (replies are still parsed but never act on a proposal).
+  emailApprovalSecret: string;
 }
 
 /** Decode a value if it looks like base64, otherwise return as-is. */
@@ -64,5 +67,6 @@ export function loadConfig(): Config {
     bountyVerifierAgentId: process.env.BOUNTY_VERIFIER_AGENT_ID || 'supervisor',
     bountyDepositRate: parseFloat(process.env.BOUNTY_DEPOSIT_RATE || '0.5'),
     bountyMaxRetries: parseInt(process.env.BOUNTY_MAX_RETRIES || '3', 10),
+    emailApprovalSecret: process.env.EMAIL_APPROVAL_SECRET || '',
   };
 }
