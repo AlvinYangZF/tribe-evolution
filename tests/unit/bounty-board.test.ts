@@ -161,6 +161,8 @@ describe('BountyBoard', () => {
     const bid2 = await board.placeBid(b2.id, 'winner_filter', 200, 'Plan');
     await board.awardBid(b2.id, bid2.id);
     await board.submitResult(b2.id, 'winner_filter', 'http://a', 'Done');
+    await board.publisherApprove(b2.id);
+    await board.supervisorApprove(b2.id);
     await board.completeBounty(b2.id);
 
     const openBounties = await board.listBounties('open');
@@ -286,7 +288,7 @@ describe('BountyBoard', () => {
 
   // ─── submitResult ──────────────────────────────────────────────────────
 
-  it('should change status to verifying after submission', async () => {
+  it('should change status to submitted after submission', async () => {
     const creator = makeAgent('creator_b', 10000);
     const winner = makeAgent('winner_b', 5000);
     await writeAgent(tempDir, creator);
@@ -308,7 +310,7 @@ describe('BountyBoard', () => {
 
     const submitted = await board.submitResult(bounty.id, 'winner_b', 'http://artifact', 'Done!');
 
-    expect(submitted.status).toBe('verifying');
+    expect(submitted.status).toBe('submitted');
   });
 
   it('should reject submission from wrong agent', async () => {
@@ -337,16 +339,13 @@ describe('BountyBoard', () => {
 
   // ─── runVerification + completeBounty (full lifecycle) ─────────────────
 
-  it('should complete full lifecycle: open → bidding → awarded → executing → verifying → completed', async () => {
+  it('should complete full lifecycle: open → bidding → awarded → submitted → publisher_review → supervisor_review → completed', async () => {
     const creator = makeAgent('creator_full', 10000);
     const bidder = makeAgent('bidder_full', 5000);
     const verifier = makeAgent('verifier_full', 1000);
     await writeAgent(tempDir, creator);
     await writeAgent(tempDir, bidder);
     await writeAgent(tempDir, verifier);
-
-    const beforeCreator = (await readAgent(tempDir, 'creator_full'))!;
-    const beforeBidder = (await readAgent(tempDir, 'bidder_full'))!;
 
     // Step 1: Create
     const bounty = await board.createBounty({
@@ -358,7 +357,6 @@ describe('BountyBoard', () => {
       deadline: Date.now() + 86400000,
       depositRate: 0.5,
       verifierAgentId: 'verifier_full',
-      verificationTests: [{ type: 'file_check', description: 'Check artifact exists', filePath: '/tmp/test_artifact', expectedContent: 'done' }],
     });
     expect(bounty.status).toBe('open');
 
@@ -370,11 +368,19 @@ describe('BountyBoard', () => {
     const awarded = await board.awardBid(bounty.id, bid.id);
     expect(awarded.status).toBe('awarded');
 
-    // Step 4: Submit (transitions to verifying)
+    // Step 4: Submit (transitions to submitted)
     const submitted = await board.submitResult(bounty.id, 'bidder_full', 'http://artifact', 'Fixed!');
-    expect(submitted.status).toBe('verifying');
+    expect(submitted.status).toBe('submitted');
 
-    // Step 5: Complete
+    // Step 5: Publisher tier
+    const publisherReviewed = await board.publisherApprove(bounty.id);
+    expect(publisherReviewed.status).toBe('publisher_review');
+
+    // Step 6: Supervisor tier
+    const supervisorReviewed = await board.supervisorApprove(bounty.id);
+    expect(supervisorReviewed.status).toBe('supervisor_review');
+
+    // Step 7: Complete
     const completed = await board.completeBounty(bounty.id);
     expect(completed.status).toBe('completed');
     expect(completed.completedAt).not.toBeNull();
@@ -384,6 +390,43 @@ describe('BountyBoard', () => {
     // Winner gets 1000 added back from escrow
     const afterBidder = await readAgent(tempDir, 'bidder_full');
     expect(afterBidder!.tokenBalance).toBe(5000 - 500 + 1000); // 5500
+  });
+
+  it('should walk through both review tiers, with rejection at either tier sending back to executing', async () => {
+    const creator = makeAgent('creator_review', 10000);
+    const winner = makeAgent('winner_review', 5000);
+    await writeAgent(tempDir, creator);
+    await writeAgent(tempDir, winner);
+
+    const bounty = await board.createBounty({
+      title: 'Review test',
+      description: 'Desc',
+      creatorId: 'creator_review',
+      type: 'bug_fix',
+      reward: 1000,
+      deadline: Date.now() + 86400000,
+      depositRate: 0.5,
+    });
+    const bid = await board.placeBid(bounty.id, 'winner_review', 800, 'Plan');
+    await board.awardBid(bounty.id, bid.id);
+
+    // Round 1: publisher rejects → back to executing
+    await board.submitResult(bounty.id, 'winner_review', 'http://a1', 'r1');
+    const pubRejected = await board.publisherReject(bounty.id);
+    expect(pubRejected.status).toBe('executing');
+
+    // Round 2: publisher approves, supervisor rejects → back to executing
+    await board.submitResult(bounty.id, 'winner_review', 'http://a2', 'r2');
+    await board.publisherApprove(bounty.id);
+    const supRejected = await board.supervisorReject(bounty.id);
+    expect(supRejected.status).toBe('executing');
+
+    // Round 3: both approve → complete
+    await board.submitResult(bounty.id, 'winner_review', 'http://a3', 'r3');
+    await board.publisherApprove(bounty.id);
+    await board.supervisorApprove(bounty.id);
+    const completed = await board.completeBounty(bounty.id);
+    expect(completed.status).toBe('completed');
   });
 
   // ─── failVerification ──────────────────────────────────────────────────
@@ -481,31 +524,80 @@ describe('BountyBoard', () => {
 
   // ─── Verification test types ───────────────────────────────────────────
 
-  it('should run shell_test verification', async () => {
+  it('should fail shell_test when no sandbox is configured (safe-by-default)', async () => {
+    const creator = makeAgent('creator_sh_off', 10000);
+    const winner = makeAgent('winner_sh_off', 5000);
+    await writeAgent(tempDir, creator);
+    await writeAgent(tempDir, winner);
+
+    const prevSandbox = process.env.BOUNTY_SHELL_SANDBOX_CMD;
+    delete process.env.BOUNTY_SHELL_SANDBOX_CMD;
+
+    try {
+      const bounty = await board.createBounty({
+        title: 'Shell test off',
+        description: 'Desc',
+        creatorId: 'creator_sh_off',
+        type: 'feature',
+        reward: 1000,
+        deadline: Date.now() + 86400000,
+        depositRate: 0.5,
+        verificationTests: [{ type: 'shell_test', description: 'Should not run', command: 'echo unsafe' }],
+      });
+      const bid = await board.placeBid(bounty.id, 'winner_sh_off', 800, 'Plan');
+      await board.awardBid(bounty.id, bid.id);
+      await board.submitResult(bounty.id, 'winner_sh_off', 'http://artifact', 'Done');
+
+      const result = await board.runVerification(bounty.id);
+      expect(result.passed).toBe(false);
+      expect(result.results.join(' ')).toMatch(/sandbox/i);
+    } finally {
+      if (prevSandbox === undefined) {
+        delete process.env.BOUNTY_SHELL_SANDBOX_CMD;
+      } else {
+        process.env.BOUNTY_SHELL_SANDBOX_CMD = prevSandbox;
+      }
+    }
+  });
+
+  it('should run shell_test through a configured sandbox prefix', async () => {
     const creator = makeAgent('creator_sh', 10000);
     const winner = makeAgent('winner_sh', 5000);
     await writeAgent(tempDir, creator);
     await writeAgent(tempDir, winner);
 
-    const bounty = await board.createBounty({
-      title: 'Shell test',
-      description: 'Desc',
-      creatorId: 'creator_sh',
-      type: 'feature',
-      reward: 1000,
-      deadline: Date.now() + 86400000,
-      depositRate: 0.5,
-      verifierAgentId: 'winner_sh',
-      verificationTests: [{ type: 'shell_test', description: 'Echo test', command: 'echo "hello"' }],
-    });
+    // `env` is a universal no-op sandbox prefix for tests — it just runs the
+    // following argv as the program. Production should use bwrap/firejail.
+    const prevSandbox = process.env.BOUNTY_SHELL_SANDBOX_CMD;
+    process.env.BOUNTY_SHELL_SANDBOX_CMD = 'env';
 
-    const bid = await board.placeBid(bounty.id, 'winner_sh', 800, 'Plan');
-    await board.awardBid(bounty.id, bid.id);
-    await board.submitResult(bounty.id, 'winner_sh', 'http://artifact', 'Done');
+    try {
+      const bounty = await board.createBounty({
+        title: 'Shell test',
+        description: 'Desc',
+        creatorId: 'creator_sh',
+        type: 'feature',
+        reward: 1000,
+        deadline: Date.now() + 86400000,
+        depositRate: 0.5,
+        verifierAgentId: 'winner_sh',
+        verificationTests: [{ type: 'shell_test', description: 'Echo test', command: 'echo "hello"' }],
+      });
 
-    const result = await board.runVerification(bounty.id);
-    expect(result.passed).toBe(true);
-    expect(result.results.length).toBeGreaterThan(0);
+      const bid = await board.placeBid(bounty.id, 'winner_sh', 800, 'Plan');
+      await board.awardBid(bounty.id, bid.id);
+      await board.submitResult(bounty.id, 'winner_sh', 'http://artifact', 'Done');
+
+      const result = await board.runVerification(bounty.id);
+      expect(result.passed).toBe(true);
+      expect(result.results.length).toBeGreaterThan(0);
+    } finally {
+      if (prevSandbox === undefined) {
+        delete process.env.BOUNTY_SHELL_SANDBOX_CMD;
+      } else {
+        process.env.BOUNTY_SHELL_SANDBOX_CMD = prevSandbox;
+      }
+    }
   });
 
   it('should run file_check verification', async () => {
@@ -625,5 +717,131 @@ describe('BountyBoard', () => {
 
     expect(bounty.verificationTests).toHaveLength(2);
     expect(bounty.verifierAgentId).toBe('verifier_1');
+  });
+
+  // ─── Custom AgentTokenMutator (C11 fix) ────────────────────────────────
+
+  it('routes agent token mutations through the injected mutator', async () => {
+    // The supervisor injects a mutator that updates its in-memory map so
+    // a deduction (e.g., placeBid deposit) doesn't get clobbered when the
+    // supervisor later persists a stale in-memory copy of the agent.
+    const inMemory = new Map<string, AgentState>();
+    inMemory.set('m_creator', makeAgent('m_creator', 10000));
+    inMemory.set('m_bidder', makeAgent('m_bidder', 5000));
+
+    let writes = 0;
+    const customBoard = new (await import('../../src/supervisor/bounty-board.js')).BountyBoard(
+      tempDir,
+      undefined,
+      {
+        read: async (id) => inMemory.get(id) ?? null,
+        write: async (agent) => {
+          writes++;
+          inMemory.set(agent.id, agent);
+        },
+      },
+    );
+
+    const bounty = await customBoard.createBounty({
+      title: 'mutator test', description: 'd', creatorId: 'm_creator',
+      type: 'bug_fix', reward: 1000, deadline: Date.now() + 86400000, depositRate: 0.5,
+    });
+
+    // placeBid → deduct deposit → mutator.write
+    await customBoard.placeBid(bounty.id, 'm_bidder', 800, 'plan');
+    expect(writes).toBeGreaterThanOrEqual(1);
+    expect(inMemory.get('m_bidder')!.tokenBalance).toBe(5000 - 500);
+
+    // The default file-based path was NOT used: nothing should exist on disk
+    // for the bidder under this tempDir.
+    const onDisk = await readAgent(tempDir, 'm_bidder');
+    expect(onDisk).toBeNull();
+  });
+
+  // ─── Treasury-funded escrow ────────────────────────────────────────────
+
+  it('should debit the treasury at award time and credit the winner at completion', async () => {
+    const creator = makeAgent('creator_t', 10000);
+    const winner = makeAgent('winner_t', 5000);
+    await writeAgent(tempDir, creator);
+    await writeAgent(tempDir, winner);
+
+    const treasury = board.getTreasury();
+    const before = await treasury.getState();
+
+    const bounty = await board.createBounty({
+      title: 'Treasury test',
+      description: 'Desc',
+      creatorId: 'creator_t',
+      type: 'bug_fix',
+      reward: 1000,
+      deadline: Date.now() + 86400000,
+      depositRate: 0.5,
+    });
+    const bid = await board.placeBid(bounty.id, 'winner_t', 800, 'Plan');
+    await board.awardBid(bounty.id, bid.id);
+
+    // Award debits the treasury by the reward amount.
+    const afterAward = await treasury.getState();
+    expect(afterAward.balance).toBe(before.balance - 1000);
+    expect(afterAward.totalIssued).toBe(before.totalIssued + 1000);
+
+    await board.submitResult(bounty.id, 'winner_t', 'http://a', 'Done');
+    await board.publisherApprove(bounty.id);
+    await board.supervisorApprove(bounty.id);
+    await board.completeBounty(bounty.id);
+
+    // Treasury balance is unchanged at completion (the reservation was made
+    // at award time); the winner's tokenBalance reflects the payout.
+    const afterComplete = await treasury.getState();
+    expect(afterComplete.balance).toBe(afterAward.balance);
+
+    const finalWinner = await readAgent(tempDir, 'winner_t');
+    // 5000 - 500 (deposit) + 1000 (escrow released) = 5500
+    expect(finalWinner!.tokenBalance).toBe(5500);
+  });
+
+  it('should refund the treasury when a bounty exhausts its retries', async () => {
+    const creator = makeAgent('creator_r', 10000);
+    const winner = makeAgent('winner_r', 5000);
+    await writeAgent(tempDir, creator);
+    await writeAgent(tempDir, winner);
+
+    const treasury = board.getTreasury();
+    const before = await treasury.getState();
+
+    const bounty = await board.createBounty({
+      title: 'Refund test',
+      description: 'Desc',
+      creatorId: 'creator_r',
+      type: 'research',
+      reward: 1000,
+      deadline: Date.now() + 86400000,
+      depositRate: 0.5,
+      maxRetries: 1,
+      verificationTests: [{ type: 'file_check', description: 'Check', filePath: '/nonexistent/file', expectedContent: 'data' }],
+    });
+    const bid = await board.placeBid(bounty.id, 'winner_r', 800, 'Plan');
+    await board.awardBid(bounty.id, bid.id);
+
+    const afterAward = await treasury.getState();
+    expect(afterAward.balance).toBe(before.balance - 1000);
+
+    // Round 1: submit, fail → retry
+    await board.submitResult(bounty.id, 'winner_r', 'http://a1', 'r1');
+    await board.failVerification(bounty.id);
+
+    // Round 2: submit, fail → exhausted, bounty re-opens
+    await board.submitResult(bounty.id, 'winner_r', 'http://a2', 'r2');
+    await board.failVerification(bounty.id);
+
+    const finalState = (await board.listBounties())[0];
+    expect(finalState.status).toBe('open');
+    expect(finalState.escrowFrozen).toBe(0);
+
+    // Treasury should be back to its pre-award balance.
+    const afterRefund = await treasury.getState();
+    expect(afterRefund.balance).toBe(before.balance);
+    expect(afterRefund.totalRefunded).toBe(before.totalRefunded + 1000);
   });
 });

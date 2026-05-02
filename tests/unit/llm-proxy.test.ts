@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { proxyCall } from '../../src/supervisor/llm-proxy.js';
+import { proxyCall } from '../../src/shared/llm.js';
 
 describe('LLM Proxy', () => {
   const originalEnv = process.env;

@@ -2,6 +2,9 @@ import { EventEmitter } from 'node:events';
 
 export interface SchedulerOptions {
   cycleIntervalMs: number;
+  /** Cycle number to resume from. Used to keep `agent.generation` monotonic
+   *  across supervisor restarts (offspring tag generation = current cycle). */
+  startingCycle?: number;
 }
 
 export interface CycleCallback {
@@ -14,7 +17,7 @@ export interface CycleCallback {
  */
 export class Scheduler extends EventEmitter {
   private cycleIntervalMs: number;
-  private currentCycle = 0;
+  private currentCycle: number;
   private running = false;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private callback: CycleCallback | null = null;
@@ -22,6 +25,7 @@ export class Scheduler extends EventEmitter {
   constructor(options: SchedulerOptions) {
     super();
     this.cycleIntervalMs = options.cycleIntervalMs;
+    this.currentCycle = options.startingCycle ?? 0;
   }
 
   /**
@@ -51,6 +55,17 @@ export class Scheduler extends EventEmitter {
    */
   getCurrentCycleNumber(): number {
     return this.currentCycle;
+  }
+
+  /**
+   * Resume counter from a previously-persisted value. Must be called before
+   * startCycle().
+   */
+  setStartingCycle(n: number): void {
+    if (this.running) {
+      throw new Error('setStartingCycle: scheduler is already running');
+    }
+    this.currentCycle = n;
   }
 
   private scheduleNext(): void {

@@ -12,6 +12,10 @@ export interface AppendEventInput {
 
 export class EventLog {
   private filePath: string;
+  // Cached chain tail. Hydrated from disk on first access, then updated
+  // in place on every append. Lets append() avoid re-reading the entire
+  // JSONL file every call, which was O(N) per write and grew unbounded.
+  private cachedTail: { hash: string; count: number } | null = null;
 
   constructor(filePathOrDir: string) {
     // If it looks like a directory, default to event-log/events.jsonl
@@ -26,15 +30,22 @@ export class EventLog {
     return readJSONL<EventLogEntry>(this.filePath);
   }
 
+  private async getTail(): Promise<{ hash: string; count: number }> {
+    if (this.cachedTail) return this.cachedTail;
+    const entries = await this.readAll();
+    this.cachedTail = entries.length === 0
+      ? { hash: GENESIS_HASH, count: 0 }
+      : { hash: entries[entries.length - 1].hash, count: entries.length };
+    return this.cachedTail;
+  }
+
   /**
    * Append a new event to the log.
    * Computes index, timestamp, prevHash, and SHA-256 hash automatically.
    */
   async append(event: AppendEventInput): Promise<EventLogEntry> {
-    const entries = await this.readAll();
-
-    const index = entries.length;
-    const prevHash = index === 0 ? GENESIS_HASH : entries[index - 1].hash;
+    const { hash: prevHash, count } = await this.getTail();
+    const index = count;
     const timestamp = Date.now();
 
     const entry: EventLogEntry = {
@@ -59,6 +70,7 @@ export class EventLog {
     entry.hash = sha256(hashPayload);
 
     await appendJSONL(this.filePath, entry);
+    this.cachedTail = { hash: entry.hash, count: count + 1 };
     return entry;
   }
 

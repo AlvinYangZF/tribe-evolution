@@ -77,4 +77,29 @@ describe('Scheduler', () => {
     expect(scheduler.getCurrentCycleNumber()).toBeGreaterThanOrEqual(2);
     expect(scheduler.getCurrentCycleNumber()).toBeLessThanOrEqual(5);
   }, 10_000);
+
+  it('resumes the cycle counter from setStartingCycle', async () => {
+    const scheduler = new Scheduler({ cycleIntervalMs: 50 });
+    scheduler.setStartingCycle(42);
+    expect(scheduler.getCurrentCycleNumber()).toBe(42);
+
+    const observed: number[] = [];
+    scheduler.startCycle(async (n) => { observed.push(n); });
+    await new Promise(r => setTimeout(r, 30));
+    scheduler.stop();
+
+    expect(observed[0]).toBe(42);
+  });
+
+  it('throws if setStartingCycle is called after startCycle', () => {
+    const scheduler = new Scheduler({ cycleIntervalMs: 1000 });
+    scheduler.startCycle(async () => { /* no-op */ });
+    expect(() => scheduler.setStartingCycle(5)).toThrow(/already running/);
+    scheduler.stop();
+  });
+
+  it('accepts startingCycle in the constructor options', () => {
+    const scheduler = new Scheduler({ cycleIntervalMs: 100, startingCycle: 17 });
+    expect(scheduler.getCurrentCycleNumber()).toBe(17);
+  });
 });

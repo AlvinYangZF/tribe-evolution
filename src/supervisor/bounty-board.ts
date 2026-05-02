@@ -1,16 +1,22 @@
 /**
  * BountyBoard — Bounty 悬赏系统
  *
- * Manages bounty lifecycle: open → bidding → awarded → executing → verifying → completed
+ * Manages bounty lifecycle:
+ *   open → bidding → awarded → executing → submitted
+ *        → publisher_review → supervisor_review → completed
+ * Either review tier can reject back to `executing` (retry) and the
+ * supervisor tier can also exhaust retries, reverting the bounty to `open`.
+ *
  * Persisted as JSON in ecosystem/bounties/bounties.json
  * Agent token balances are managed via ecosystem/agents/{agentId}.json
  */
 
 import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs/promises';
 import { safeReadJSON, safeWriteJSON, ensureDir } from '../shared/filesystem.js';
+import { Treasury } from './treasury.js';
 import type {
   Bounty, BountyStatus, BountyType, Bid,
   VerificationTest, AgentState,
@@ -43,13 +49,40 @@ function assertTransition(from: BountyStatus, to: BountyStatus): void {
   }
 }
 
+/**
+ * Pluggable agent-token I/O. The default implementation reads/writes JSON
+ * files under `<ecosystemDir>/agents/`. The Supervisor injects one that
+ * routes through its in-memory `Map<id, AgentState>` so an agent mutation
+ * triggered by the bounty board (e.g., placeBid debiting a deposit) doesn't
+ * race with a stale in-memory copy that the supervisor's cycle loop later
+ * persists, silently overwriting the deduction.
+ */
+export interface AgentTokenMutator {
+  read: (agentId: string) => Promise<AgentState | null>;
+  write: (agent: AgentState) => Promise<void>;
+}
+
 export class BountyBoard {
   private bountiesFilePath: string;
   private agentsDir: string;
+  private treasury: Treasury;
+  private mutator: AgentTokenMutator;
 
-  constructor(private ecosystemDir: string) {
+  constructor(private ecosystemDir: string, treasury?: Treasury, mutator?: AgentTokenMutator) {
     this.bountiesFilePath = path.join(ecosystemDir, BOUNTIES_DIR, BOUNTIES_FILE);
     this.agentsDir = path.join(ecosystemDir, AGENTS_DIR);
+    this.treasury = treasury ?? new Treasury(ecosystemDir);
+    this.mutator = mutator ?? {
+      read: (id) => safeReadJSON<AgentState>(path.join(this.agentsDir, `${id}.json`)),
+      write: async (agent) => {
+        await ensureDir(this.agentsDir);
+        await safeWriteJSON(path.join(this.agentsDir, `${agent.id}.json`), agent);
+      },
+    };
+  }
+
+  getTreasury(): Treasury {
+    return this.treasury;
   }
 
   // ─── Persistence helpers ──────────────────────────────────────────────
@@ -73,16 +106,11 @@ export class BountyBoard {
   }
 
   private async readAgent(agentId: string): Promise<AgentState> {
-    const agent = await safeReadJSON<AgentState>(path.join(this.agentsDir, `${agentId}.json`));
+    const agent = await this.mutator.read(agentId);
     if (!agent) {
       throw new Error(`Agent not found: ${agentId}`);
     }
     return agent;
-  }
-
-  private async writeAgent(agent: AgentState): Promise<void> {
-    await ensureDir(this.agentsDir);
-    await safeWriteJSON(path.join(this.agentsDir, `${agent.id}.json`), agent);
   }
 
   /**
@@ -95,7 +123,7 @@ export class BountyBoard {
       throw new Error(`Insufficient token balance for agent ${agentId}: ${agent.tokenBalance} < ${amount}`);
     }
     agent.tokenBalance -= amount;
-    await this.writeAgent(agent);
+    await this.mutator.write(agent);
     return agent;
   }
 
@@ -105,7 +133,7 @@ export class BountyBoard {
   private async addAgentTokens(agentId: string, amount: number): Promise<AgentState> {
     const agent = await this.readAgent(agentId);
     agent.tokenBalance += amount;
-    await this.writeAgent(agent);
+    await this.mutator.write(agent);
     return agent;
   }
 
@@ -221,8 +249,11 @@ export class BountyBoard {
       }
     }
 
-    // Freeze the reward as escrow (deduct from creator)
-    // Note: we track escrowFrozen but don't deduct creator balance — it's virtual holding
+    // Treasury funds the bounty escrow at award time. The reward is reserved
+    // out of the system treasury now so winner credit at completion time is
+    // backed by a real token movement (no minting).
+    await this.treasury.debit(bounty.reward);
+
     const updated: Bounty = {
       ...bounty,
       status: 'awarded',
@@ -289,7 +320,27 @@ export class BountyBoard {
     switch (test.type) {
       case 'shell_test': {
         if (!test.command) throw new Error('shell_test requires command');
-        execSync(test.command, { timeout: 10000, stdio: 'pipe' });
+        // Bounty verifications run agent-supplied shell commands. To prevent
+        // an agent (or a hallucinating LLM) from posting a bounty whose
+        // verification ends up running `rm -rf /` on the host, shell_test
+        // is disabled unless the operator configures a sandbox.
+        //
+        // BOUNTY_SHELL_SANDBOX_CMD is split on whitespace into argv[0] + args
+        // and prepended to ['sh', '-c', test.command]. Recommended values:
+        //   bwrap --ro-bind / / --tmpfs /tmp --unshare-net --unshare-pid \
+        //         --die-with-parent --
+        //   firejail --noprofile --net=none --
+        // Tests can use `env` as a passthrough (no real sandboxing).
+        const sandboxCmd = process.env.BOUNTY_SHELL_SANDBOX_CMD;
+        if (!sandboxCmd || !sandboxCmd.trim()) {
+          throw new Error('shell_test requires BOUNTY_SHELL_SANDBOX_CMD to be configured');
+        }
+        const sandboxArgv = sandboxCmd.trim().split(/\s+/);
+        const [sandboxBin, ...sandboxArgs] = sandboxArgv;
+        execFileSync(sandboxBin, [...sandboxArgs, 'sh', '-c', test.command], {
+          timeout: 10000,
+          stdio: 'pipe',
+        });
         return true;
       }
 
@@ -326,20 +377,37 @@ export class BountyBoard {
   // ─── State transitions ────────────────────────────────────────────────
 
   async publisherApprove(bountyId: string): Promise<Bounty> {
-    const bounty = await this.getBounty(bountyId);
-    if (!bounty) throw new Error('Bounty not found');
-    if (bounty.status !== 'submitted') throw new Error('Must be in submitted state');
-    bounty.status = 'publisher_review';
-    await this.saveAll([bounty]);
-    return bounty;
+    const { bounties, bounty, index } = await this.findBounty(bountyId);
+    assertTransition(bounty.status, 'publisher_review');
+    const updated: Bounty = { ...bounty, status: 'publisher_review' };
+    bounties[index] = updated;
+    await this.saveAll(bounties);
+    return updated;
   }
   async publisherReject(bountyId: string): Promise<Bounty> {
-    const bounty = await this.getBounty(bountyId);
-    if (!bounty) throw new Error('Bounty not found');
+    const { bounties, bounty, index } = await this.findBounty(bountyId);
     if (bounty.status !== 'submitted') throw new Error('Must be in submitted state');
-    bounty.status = 'executing';
-    await this.saveAll([bounty]);
-    return bounty;
+    const updated: Bounty = { ...bounty, status: 'executing' };
+    bounties[index] = updated;
+    await this.saveAll(bounties);
+    return updated;
+  }
+
+  async supervisorApprove(bountyId: string): Promise<Bounty> {
+    const { bounties, bounty, index } = await this.findBounty(bountyId);
+    assertTransition(bounty.status, 'supervisor_review');
+    const updated: Bounty = { ...bounty, status: 'supervisor_review' };
+    bounties[index] = updated;
+    await this.saveAll(bounties);
+    return updated;
+  }
+  async supervisorReject(bountyId: string): Promise<Bounty> {
+    const { bounties, bounty, index } = await this.findBounty(bountyId);
+    if (bounty.status !== 'publisher_review') throw new Error('Must be in publisher_review state');
+    const updated: Bounty = { ...bounty, status: 'executing' };
+    bounties[index] = updated;
+    await this.saveAll(bounties);
+    return updated;
   }
 
   async completeBounty(bountyId: string): Promise<Bounty> {
@@ -368,7 +436,10 @@ export class BountyBoard {
   async failVerification(bountyId: string): Promise<Bounty> {
     const { bounties, bounty, index } = await this.findBounty(bountyId);
 
-    if (bounty.status !== 'submitted') {
+    // Verification can fail at any review tier — either tier can reject back
+    // to `executing`, and the supervisor tier can also exhaust retries.
+    const reviewStates: BountyStatus[] = ['submitted', 'publisher_review', 'supervisor_review'];
+    if (!reviewStates.includes(bounty.status)) {
       throw new Error(`Cannot fail verification for bounty in status: ${bounty.status}`);
     }
 
@@ -394,6 +465,12 @@ export class BountyBoard {
         } catch {
           // Agent may have insufficient balance; skip penalty
         }
+      }
+
+      // The bounty failed for good — refund the escrow to the treasury so
+      // the reservation is released (the bounty can be re-awarded later).
+      if (bounty.escrowFrozen > 0) {
+        await this.treasury.refund(bounty.escrowFrozen);
       }
 
       const updated: Bounty = {

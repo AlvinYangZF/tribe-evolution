@@ -322,20 +322,26 @@ export function runCycle(agents: AgentState[], cycleNumber: number, maxAgents: n
   let { survivors, eliminated } = eliminateStepped(aliveRanked);
   eliminated.push(...deadOfAge);
 
-  // Reproduction: only if below 30
-  const offspring = survivors.length < 30
+  // Reproduction: only when survivors are below the population cap.
+  const offspring = survivors.length < maxAgents
     ? reproduce(
         ranked.filter(r => survivors.some(s => s.id === r.agent.id)),
-        Math.min(5, 30 - survivors.length),
+        Math.min(5, maxAgents - survivors.length),
       )
     : [];
 
-  // Step 4: Update ages and protections for survivors
-  const updatedSurvivors = survivors.map((agent) => ({
-    ...agent,
-    age: agent.age + 1,
-    protectionRounds: Math.max(0, agent.protectionRounds - 1),
-  }));
+  // Step 4: Update ages and protections for survivors. Agents who reach the
+  // death threshold (age >= 50) after incrementing are marked dead now,
+  // rather than waiting for the next cycle's evaluateFitness pass.
+  const updatedSurvivors = survivors.map((agent) => {
+    const newAge = agent.age + 1;
+    return {
+      ...agent,
+      age: newAge,
+      protectionRounds: Math.max(0, agent.protectionRounds - 1),
+      alive: agent.alive && newAge < 50,
+    };
+  });
 
   // Set generation on offspring
   const updatedOffspring = offspring.map((child) => ({

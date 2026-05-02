@@ -1,13 +1,18 @@
-import type { LLMRequest, LLMResponse } from '../shared/types.js';
+/**
+ * Shared LLM client. Used by both the in-process supervisor decision loop
+ * and the JSON-RPC agent subprocess so the two deployment shells don't
+ * drift on retry, timeout, or token-usage handling.
+ *
+ * Token deduction is handled by the caller (Supervisor reads tokenUsage.total
+ * and subtracts from the agent's on-disk tokenBalance). This module never
+ * mutates agent state directly.
+ */
+
+import type { LLMRequest, LLMResponse } from './types.js';
 
 const DEEPSEEK_API_URL = 'https://api.deepseek.com/chat/completions';
 const LLM_TIMEOUT_MS = 30_000;
 
-/**
- * Proxy a call to the DeepSeek API.
- * Returns only usage/cost data; token deduction is handled by the Supervisor
- * based on the agent's actual tokenBalance field.
- */
 export async function proxyCall(request: LLMRequest): Promise<LLMResponse> {
   const apiKey = process.env.DEEPSEEK_API_KEY;
   if (!apiKey) {
@@ -51,9 +56,6 @@ export async function proxyCall(request: LLMRequest): Promise<LLMResponse> {
     output: data.usage.completion_tokens,
     total: data.usage.total_tokens,
   };
-
-  // Token deduction is handled by the Supervisor (agent.tokenBalance)
-  // so that the on-disk agent state stays in sync.
 
   return {
     requestId: request.requestId,

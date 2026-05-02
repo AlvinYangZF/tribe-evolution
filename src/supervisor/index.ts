@@ -7,19 +7,19 @@ import { ProposalManager } from './proposal.js';
 import { runCycle as runLifeCycle } from './life-cycle.js';
 import { notifyUser, type NotifyConfig } from './notify.js';
 import { decide } from '../agent/brain.js';
-import { proxyCall } from './llm-proxy.js';
-import { genomeToSystemPrompt } from '../agent/genome.js';
+import { proxyCall } from '../shared/llm.js';
+import { genomeToSystemPrompt, expressGenome, expressedToGenome } from '../agent/genome.js';
 import type { Config } from '../config/index.js';
-import { checkEmailReplies as checkPop3, type EmailReply } from './email-checker.js';
+import { checkEmailReplies as checkPop3 } from './email-checker.js';
+import { classifyReply } from './email-approval.js';
 import { ensureDir, safeWriteJSON } from '../shared/filesystem.js';
 import { BountyBoard } from './bounty-board.js';
-import type { AgentState } from '../shared/types.js';
+import { Treasury } from './treasury.js';
+import type { AgentState, SkillName } from '../shared/types.js';
 
-// Proposal cooldown tracker: agent must wait N cycles between proposals
-const agentLastProposal = new Map<string, number>();
+const ALL_SKILL_NAMES: SkillName[] = ['web_search', 'code_write', 'data_analyze', 'artifact_write', 'observe', 'propose'];
 
-// Pending digest: auto-approved proposals queued for summary email
-const pendingDigest: Array<{id: string; agentId: string; title: string; status: string}> = [];
+type DigestEntry = { id: string; agentId: string; title: string; status: string };
 
 /**
  * Automatic proposal evaluation by Supervisor.
@@ -60,63 +60,18 @@ function evaluateProposal(proposal: { title: string; description: string; agentI
   return { action: 'approve', reason: '提案格式和内容合格' };
 }
 
-/**
- * Extract a proposal ID from an email reply body or subject.
- * Matches patterns like:
- *   - "approve prop_xxx"
- *   - "reject <uuid>"
- *   - "批准 <uuid>"
- *   - Subject lines containing a UUID
- */
-function extractProposalId(text: string): string | null {
-  // Match UUID pattern
-  const uuidRe = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
-  const m = text.match(uuidRe);
-  return m ? m[0] : null;
-}
-
-/**
- * Determine if an email reply is an approval or rejection,
- * and extract the target proposalId.
- */
-function classifyReply(reply: EmailReply): {
-  action: 'approve' | 'reject' | null;
-  proposalId: string | null;
-  reason: string;
-} {
-  const body = reply.body.trim();
-  const bodyLower = body.toLowerCase();
-  const subject = reply.subject;
-
-  // Try to extract proposal ID from body + subject
-  const proposalId = extractProposalId(body) ?? extractProposalId(subject);
-
-  const approved =
-    bodyLower.startsWith('approve') ||
-    bodyLower.startsWith('同意') ||
-    bodyLower.startsWith('批准');
-  const rejected =
-    bodyLower.startsWith('reject') ||
-    bodyLower.startsWith('拒绝') ||
-    bodyLower.startsWith('不同意');
-
-  if (approved) return { action: 'approve', proposalId, reason: '' };
-  if (rejected) {
-    const reason = body
-      .replace(/^(reject|拒绝|不同意)\s*/i, '')
-      .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\s*/i, '')
-      .trim() || '用户拒绝';
-    return { action: 'reject', proposalId, reason };
-  }
-
-  return { action: null, proposalId: null, reason: '' };
-}
+// Email reply parsing and HMAC verification live in ./email-approval.ts.
 
 /**
  * Make an LLM-powered decision for a single agent.
  * Handles LLM call, token deduction from agent.tokenBalance, scoring, and proposal creation.
  * Designed to be called in parallel via Promise.allSettled.
  */
+interface CycleSnapshot {
+  openBounties: number;
+  topBountyReward: number;
+}
+
 async function decideForAgent(
   agent: AgentState,
   cycleNum: number,
@@ -125,6 +80,9 @@ async function decideForAgent(
   bountyBoard: BountyBoard,
   notifyConfig: NotifyConfig,
   saveAgent: (a: AgentState) => Promise<void>,
+  agentLastProposal: Map<string, number>,
+  pendingDigest: DigestEntry[],
+  snapshot: CycleSnapshot,
 ): Promise<void> {
   agent.age += 1;
   const g = agent.genome;
@@ -156,8 +114,8 @@ async function decideForAgent(
       aliveCount,
       pendingMessages: 0,
       availableResources: 0,
-      openBounties: await (async () => { try { const b = await bountyBoard.listBounties(); return b.length; } catch { return 0; } })(),
-      topBountyReward: await (async () => { try { const o = await bountyBoard.listBounties(); return o.length > 0 ? Math.max(...o.map(b => b.reward)) : 0; } catch { return 0; } })(),
+      openBounties: snapshot.openBounties,
+      topBountyReward: snapshot.topBountyReward,
     }, llmCall);
 
     // Deduct tokens from agent balance (was previously in a detached module-level Map)
@@ -195,29 +153,35 @@ async function decideForAgent(
             await saveAgent(agent);
           }
         }
-      } catch(e) {}
+      } catch (err: unknown) {
+        const m = err instanceof Error ? err.message : String(err);
+        console.warn(`  ⚠️ ${agent.id} bid_bounty failed: ${m}`);
+      }
     }
 
-    // When agent chooses 'develop_skill', research a new skill
+    // When agent chooses 'develop_skill', train one of its existing skills.
+    // The bump is applied to the diploid genome (random allele) so the gain
+    // is heritable through reproduction; the haploid `genome` is then
+    // re-expressed to keep the two views in sync.
     if (decision.action === 'develop_skill') {
-      const skillTypes = ['research', 'implement', 'tool'];
-      const type = skillTypes[Math.floor(Math.random() * skillTypes.length)];
-      const newSkills = {
-        research: ['deep_research', 'trend_analysis', 'knowledge_synthesis'],
-        implement: ['code_generation', 'system_design', 'auto_debug'],
-        tool: ['web_automation', 'data_scraping', 'api_integration'],
-      };
-      const skillName = newSkills[type as keyof typeof newSkills][Math.floor(Math.random() * newSkills[type as keyof typeof newSkills].length)];
       const cost = 5000;
-      if (agent.tokenBalance >= cost) {
-        agent.tokenBalance -= cost;
-        agent.genome.skills = agent.genome.skills || {};
-        (agent.genome.skills as Record<string, number>)[skillName] = ((agent.genome.skills as Record<string, number>)[skillName] || 0.3) + 0.2;
-        agent.contributionScore += 20;
-        console.log('  🔬 ' + agent.id + ' developed ' + type + ' skill: ' + skillName);
-        await saveAgent(agent);
-      } else {
+      if (agent.tokenBalance < cost) {
         agent.contributionScore = 10;
+      } else if (!agent.diploidGenome) {
+        // Defensive: pre-diploid agents shouldn't exist after seed, but skip
+        // rather than corrupt state.
+        agent.contributionScore = 10;
+      } else {
+        agent.tokenBalance -= cost;
+        const skill = ALL_SKILL_NAMES[Math.floor(Math.random() * ALL_SKILL_NAMES.length)];
+        const allele: 'dominant' | 'recessive' = Math.random() < 0.5 ? 'dominant' : 'recessive';
+        const before = agent.diploidGenome.skills[skill][allele];
+        agent.diploidGenome.skills[skill][allele] = Math.min(1, before + 0.2);
+        const expressed = expressGenome(agent.diploidGenome);
+        agent.genome = expressedToGenome(expressed);
+        agent.contributionScore += 20;
+        console.log(`  🔬 ${agent.id} trained ${skill} (${allele}: ${before.toFixed(2)} → ${agent.diploidGenome.skills[skill][allele].toFixed(2)})`);
+        await saveAgent(agent);
       }
     }
 
@@ -244,8 +208,20 @@ async function decideForAgent(
         // Auto-evaluate: Supervisor decides approve/reject/escalate
         const evaluation = evaluateProposal(proposal, agent);
         if (evaluation.action === 'approve') {
+          // Treasury funds the proposal reward — no minting from thin air.
+          // If the treasury can't cover it, flip to a rejection rather than
+          // silently failing.
+          try {
+            await bountyBoard.getTreasury().debit(proposal.tokenReward);
+          } catch (err: unknown) {
+            const m = err instanceof Error ? err.message : String(err);
+            await proposalManager.rejectProposal(proposal.id, `Treasury cannot fund: ${m}`, 'supervisor');
+            console.log(`  ❌ Auto-rejected (treasury): ${proposal.id}`);
+            return;
+          }
           await proposalManager.approveProposal(proposal.id, 'supervisor');
           agent.tokenBalance += proposal.tokenReward;
+          await saveAgent(agent);
           console.log(`  ✅ Auto-approved: ${proposal.id}`);
           pendingDigest.push(proposal);
         } else if (evaluation.action === 'reject') {
@@ -280,7 +256,13 @@ export class Supervisor extends EventEmitter {
   private scheduler: Scheduler;
   private proposalManager: ProposalManager;
   private bountyBoard: BountyBoard;
-  private lastProposalCount = 0;
+  private seenProposalIds: Set<string> = new Set();
+  // Proposal cooldown tracker: agent must wait N cycles between proposals.
+  // In-memory; resets on restart (acceptable, since the worst case is one
+  // extra proposal from a chatty agent right after a restart).
+  private agentLastProposal: Map<string, number> = new Map();
+  // Auto-approved proposals queued for the every-3-cycles digest email.
+  private pendingDigest: DigestEntry[] = [];
   private started = false;
   private agents: Map<string, AgentState> = new Map();
   private dashboard: { broadcast: () => Promise<void> } | null = null;
@@ -290,10 +272,41 @@ export class Supervisor extends EventEmitter {
     this.config = config;
     this.eventLog = new EventLog(config.ecosystemDir);
     this.proposalManager = new ProposalManager(config.ecosystemDir);
-    this.bountyBoard = new BountyBoard(config.ecosystemDir);
+    // Route the bounty board's agent-token mutations through this
+    // supervisor's in-memory map so a deduction (e.g., placeBid deposit) and
+    // a later in-cycle saveAgent don't race. Falls through to disk for
+    // agents not in memory (e.g., already-eliminated bidders).
+    this.bountyBoard = new BountyBoard(
+      config.ecosystemDir,
+      undefined,
+      {
+        read: async (id) => {
+          const inMem = this.agents.get(id);
+          if (inMem) return inMem;
+          const dir = path.join(config.ecosystemDir, 'agents');
+          try {
+            const raw = await fs.readFile(path.join(dir, `${id}.json`), 'utf-8');
+            return JSON.parse(raw) as AgentState;
+          } catch { return null; }
+        },
+        write: async (agent) => {
+          if (this.agents.has(agent.id)) this.agents.set(agent.id, agent);
+          await this.saveAgent(agent);
+        },
+      },
+    );
+    // Cycle counter is persisted at ecosystem/scheduler-state.json so
+    // generation numbers tagged on offspring stay monotonic across restarts
+    // (otherwise gen=0 keeps recurring every time the supervisor boots).
     this.scheduler = new Scheduler({ cycleIntervalMs: config.cycleIntervalMs });
     this.scheduler.on('cycleStart', (n: number) => this.emit('cycleStart', n));
-    this.scheduler.on('cycleEnd', (n: number) => this.emit('cycleEnd', n));
+    this.scheduler.on('cycleEnd', async (n: number) => {
+      this.emit('cycleEnd', n);
+      await safeWriteJSON(
+        path.join(this.config.ecosystemDir, 'scheduler-state.json'),
+        { lastCycle: n },
+      );
+    });
   }
 
   /** Build the NotifyConfig from the main Config. */
@@ -304,6 +317,7 @@ export class Supervisor extends EventEmitter {
       emailUser: this.config.emailUser,
       emailPass: this.config.emailPass,
       notifyEmail: this.config.notifyEmail,
+      emailApprovalSecret: this.config.emailApprovalSecret,
     };
   }
 
@@ -320,6 +334,25 @@ export class Supervisor extends EventEmitter {
     } catch (err: unknown) {
       console.warn(`Dashboard unavailable: ${err instanceof Error ? err.message : String(err)}`);
     }
+
+    // Seed seenProposalIds with whatever's already pending so a restart
+    // doesn't re-notify (or re-process) every existing pending proposal.
+    try {
+      const pending = await this.proposalManager.getPendingProposals();
+      for (const p of pending) this.seenProposalIds.add(p.id);
+    } catch { /* proposal log may be missing on first run */ }
+
+    // Resume the scheduler cycle counter from persisted state so offspring
+    // generation numbers stay monotonic across restarts.
+    try {
+      const persisted = JSON.parse(
+        await fs.readFile(path.join(this.config.ecosystemDir, 'scheduler-state.json'), 'utf-8'),
+      ) as { lastCycle?: number };
+      if (typeof persisted.lastCycle === 'number') {
+        // lastCycle is the most recently completed cycle; resume at lastCycle + 1
+        this.scheduler.setStartingCycle(persisted.lastCycle + 1);
+      }
+    } catch { /* no persisted state on first run */ }
 
     await this.eventLog.append({ type: 'agent_born', agentId: 'supervisor', data: { action: 'start', agentCount: this.agents.size } });
     console.log(`✅ ${this.agents.size} agents loaded, starting cycles...`);
@@ -347,6 +380,14 @@ export class Supervisor extends EventEmitter {
       for (const file of await fs.readdir(dir)) {
         if (!file.endsWith('.json')) continue;
         const agent = JSON.parse(await fs.readFile(path.join(dir, file), 'utf-8')) as AgentState;
+        // Defensive: re-express the haploid `genome` from the diploid source
+        // of truth so any on-disk drift between the two views is corrected.
+        // The diploid is the genetic state; the haploid is its expressed
+        // snapshot. Reproduction and develop_skill keep them in sync, but
+        // hand-edits or third-party writers might not.
+        if (agent.diploidGenome) {
+          agent.genome = expressedToGenome(expressGenome(agent.diploidGenome));
+        }
         this.agents.set(agent.id, agent);
       }
     } catch { /* dir may not exist */ }
@@ -357,16 +398,38 @@ export class Supervisor extends EventEmitter {
   }
 
   private async runCycle(cycleNum: number): Promise<void> {
-    await this.eventLog.append({ type: 'token_allocated', agentId: 'supervisor', data: { cycle: cycleNum, action: 'cycle_start' } });
+    await this.eventLog.append({ type: 'cycle_start', agentId: 'supervisor', data: { cycle: cycleNum } });
     console.log(`\n🔄 Cycle ${cycleNum} — ${this.agents.size} agents`);
     await this.loadAgents();
 
     const alive = [...this.agents.values()].filter(a => a.alive);
 
+    // Snapshot ecosystem-wide signals once per cycle so we don't re-read the
+    // bounties file for every agent's prompt assembly.
+    let snapshot: CycleSnapshot = { openBounties: 0, topBountyReward: 0 };
+    try {
+      const open = await this.bountyBoard.listBounties('open');
+      snapshot = {
+        openBounties: open.length,
+        topBountyReward: open.length > 0 ? Math.max(...open.map(b => b.reward)) : 0,
+      };
+    } catch { /* bounties file may not exist on first run */ }
+
     // LLM-powered decisions for each agent (parallel)
     const results = await Promise.allSettled(
       alive.map(agent =>
-        decideForAgent(agent, cycleNum, alive.length, this.proposalManager, this.bountyBoard, this.getNotifyConfig(), this.saveAgent.bind(this))
+        decideForAgent(
+          agent,
+          cycleNum,
+          alive.length,
+          this.proposalManager,
+          this.bountyBoard,
+          this.getNotifyConfig(),
+          this.saveAgent.bind(this),
+          this.agentLastProposal,
+          this.pendingDigest,
+          snapshot,
+        )
       )
     );
 
@@ -407,15 +470,15 @@ export class Supervisor extends EventEmitter {
     await this.checkEmailReplies();
 
     // Send digest email every 3 cycles with auto-approved proposals
-    if (cycleNum % 3 === 0 && pendingDigest.length > 0) {
+    if (cycleNum % 3 === 0 && this.pendingDigest.length > 0) {
       const digestLines = [
         '🧬 Tribe Evolution — 提案摘要',
         '='.repeat(40),
         `Cycle ${cycleNum} | ${alive.length} agents alive`,
         '',
-        `Supervisor 自动审批了 ${pendingDigest.length} 条提案:`,
+        `Supervisor 自动审批了 ${this.pendingDigest.length} 条提案:`,
       ];
-      for (const p of pendingDigest) {
+      for (const p of this.pendingDigest) {
         digestLines.push(`  ${p.status === 'approved' ? '✅' : '❌'} [${p.agentId.slice(0,8)}] ${p.title.slice(0,60)}`);
       }
       digestLines.push('');
@@ -425,69 +488,83 @@ export class Supervisor extends EventEmitter {
       notifyUser(this.getNotifyConfig(), {
         agentId: 'supervisor',
         type: 'task_suggestion',
-        title: `Digest: ${pendingDigest.length} auto-approved proposals`,
+        title: `Digest: ${this.pendingDigest.length} auto-approved proposals`,
         description: digestLines.join('\n'),
         proposalId: 'digest',
       }).catch(() => {});
-      console.log(`  📧 Digest email sent: ${pendingDigest.length} proposals`);
-      pendingDigest.length = 0;
+      console.log(`  📧 Digest email sent: ${this.pendingDigest.length} proposals`);
+      this.pendingDigest.length = 0;
     }
 
     const totalFitness = alive.reduce((s, a) => s + a.fitness, 0);
     const avgFitness = alive.length > 0 ? (totalFitness / alive.length).toFixed(1) : '0';
     console.log(`  📊 ${alive.length} alive, avg fitness: ${avgFitness}`);
-    await this.eventLog.append({ type: 'task_completed', agentId: 'supervisor', data: { cycle: cycleNum, action: 'cycle_end', aliveCount: alive.length, avgFitness } });
+    await this.eventLog.append({ type: 'cycle_end', agentId: 'supervisor', data: { cycle: cycleNum, aliveCount: alive.length, avgFitness } });
   }
 
 
   private async processBountyExecutions(alive: AgentState[]): Promise<void> {
+    let awarded;
     try {
-      const awarded = await this.bountyBoard.listBounties('awarded');
-      for (const bounty of awarded) {
-        if (!bounty.winningBidId) continue;
-        const winningBid = bounty.bids.find((b: any) => b.id === bounty.winningBidId);
-        if (!winningBid) continue;
-        const winner = alive.find(a => a.id === winningBid.agentId);
-        if (!winner) continue;
+      awarded = await this.bountyBoard.listBounties('awarded');
+    } catch (err: unknown) {
+      const m = err instanceof Error ? err.message : String(err);
+      console.warn(`  ⚠️ Bounty execution: failed to list awarded bounties: ${m}`);
+      return;
+    }
 
-        winner.contributionScore += 50;
-        const summary = "Agent " + winner.genome.personaName + " completed: " + bounty.title;
+    for (const bounty of awarded) {
+      if (!bounty.winningBidId) continue;
+      const winningBid = bounty.bids.find((b: any) => b.id === bounty.winningBidId);
+      if (!winningBid) continue;
+      const winner = alive.find(a => a.id === winningBid.agentId);
+      if (!winner) continue;
 
-        try {
-          await this.bountyBoard.submitResult(bounty.id, winner.id, summary, summary);
-          console.log("  🏗️ " + winner.id + " executing bounty: " + bounty.title.slice(0,30));
+      winner.contributionScore += 50;
+      const summary = "Agent " + winner.genome.personaName + " completed: " + bounty.title;
 
-          // Publisher auto-review (simulated — in production, user approves manually)
-          await this.bountyBoard.publisherApprove(bounty.id);
-          
-          // Supervisor review
-          if (bounty.verificationTests.length === 0) {
-            const result = await this.bountyBoard.runVerification(bounty.id);
-            if (result.passed) {
-              await this.bountyBoard.completeBounty(bounty.id);
-              winner.tokenBalance += bounty.reward;
-              await this.saveAgent(winner);
-              console.log("  ✅ Bounty completed! " + winner.id + " earned " + bounty.reward + " tokens");
-              await this.eventLog.append({ type: 'task_completed', agentId: winner.id, data: { action: 'bounty_completed', bountyId: bounty.id, reward: bounty.reward } });
-            }
-          }
-        } catch(e) {}
+      try {
+        await this.bountyBoard.submitResult(bounty.id, winner.id, summary, summary);
+        console.log("  🏗️ " + winner.id + " executing bounty: " + bounty.title.slice(0,30));
+
+        // Two-tier review (auto-simulated — in production, the publisher and
+        // the supervisor agent each approve via the dashboard).
+        await this.bountyBoard.publisherApprove(bounty.id);
+        await this.bountyBoard.supervisorApprove(bounty.id);
+
+        // Run verification (no-op when verificationTests is empty → passes)
+        const result = await this.bountyBoard.runVerification(bounty.id);
+        if (result.passed) {
+          await this.bountyBoard.completeBounty(bounty.id);
+          winner.tokenBalance += bounty.reward;
+          await this.saveAgent(winner);
+          console.log("  ✅ Bounty completed! " + winner.id + " earned " + bounty.reward + " tokens");
+          await this.eventLog.append({ type: 'task_completed', agentId: winner.id, data: { action: 'bounty_completed', bountyId: bounty.id, reward: bounty.reward } });
+        } else {
+          await this.bountyBoard.failVerification(bounty.id);
+          console.log("  ❌ Bounty verification failed: " + bounty.title.slice(0,30) + " (" + result.results.join('; ').slice(0,80) + ")");
+        }
+      } catch (err: unknown) {
+        const m = err instanceof Error ? err.message : String(err);
+        console.warn(`  ⚠️ Bounty ${bounty.id.slice(0,8)} execution failed: ${m}`);
       }
-    } catch(e) {}
+    }
   }
 
   private async scanProposals(): Promise<void> {
     const nc = this.getNotifyConfig();
     try {
+      // Walk all currently-pending proposals; notify only the ones we haven't
+      // seen before. Tracking by ID set is robust to count fluctuations as
+      // proposals get auto-approved or auto-rejected mid-cycle.
       const pending = await this.proposalManager.getPendingProposals();
-      if (pending.length > this.lastProposalCount) {
-        for (const p of pending.slice(this.lastProposalCount)) {
-          console.log(`  📩 Proposal from ${p.agentId}: "${p.title}"`);
-          await this.eventLog.append({ type: 'proposal_created', agentId: p.agentId, data: { proposalId: p.id, title: p.title } });
-          notifyUser(nc, { agentId: p.agentId, type: p.type, title: p.title, description: p.description, tokenCost: p.tokenCost, proposalId: p.id }).catch(() => {});
-        }
+      for (const p of pending) {
+        if (this.seenProposalIds.has(p.id)) continue;
+        this.seenProposalIds.add(p.id);
+        console.log(`  📩 Proposal from ${p.agentId}: "${p.title}"`);
+        await this.eventLog.append({ type: 'proposal_created', agentId: p.agentId, data: { proposalId: p.id, title: p.title } });
+        notifyUser(nc, { agentId: p.agentId, type: p.type, title: p.title, description: p.description, tokenCost: p.tokenCost, proposalId: p.id }).catch(() => {});
       }
-      this.lastProposalCount = pending.length;
       const expired = await this.proposalManager.expireOldProposals();
       if (expired > 0) console.log(`  🧹 Expired ${expired} stale proposals`);
     } catch (err: unknown) {
@@ -524,11 +601,13 @@ export class Supervisor extends EventEmitter {
       if (replies.length === 0) return;
 
       for (const reply of replies) {
-        const { action, proposalId, reason } = classifyReply(reply);
+        const { action, proposalId, reason, rejectionReason } = classifyReply(reply, this.config.emailApprovalSecret);
 
         if (!action || !proposalId) {
-          // No actionable command or no proposal ID found — skip
-          console.log(`  📧 Email skipped (no matching proposal ID): "${reply.subject}"`);
+          // No actionable command, no proposal id, or no valid HMAC token —
+          // log the why and move on. Without a token, the reply is purely
+          // informational; the operator should approve via the dashboard.
+          console.log(`  📧 Email skipped: "${reply.subject}" (${rejectionReason ?? 'no action'})`);
           continue;
         }
 

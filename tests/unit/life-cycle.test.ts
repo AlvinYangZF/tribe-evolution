@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { evaluateFitness, eliminate, reproduce, runCycle, canReproduce } from '../../src/supervisor/life-cycle.js';
+import { evaluateFitness, eliminateStepped, reproduce, runCycle, canReproduce } from '../../src/supervisor/life-cycle.js';
 import { createRandomDiploidGenome, expressGenome } from '../../src/agent/genome.js';
 import type { AgentState, Genome, DiploidGenome, Gender } from '../../src/shared/types.js';
 
@@ -103,47 +103,57 @@ describe('life-cycle', () => {
     });
   });
 
-  describe('eliminate', () => {
-    it('should eliminate bottom 30% by default', () => {
+  describe('eliminateStepped', () => {
+    it('should eliminate 0 when population is below 20', () => {
       const agents = [1,2,3,4,5,6,7,8,9,10].map(i =>
         makeAgent(`a${i}`, { protectionRounds: 0, contributionScore: i * 10, age: i, reputation: i / 10 })
       );
       const ranked = evaluateFitness(agents);
-      const { survivors, eliminated } = eliminate(ranked, 0.3);
-      // 10 agents * 0.3 = 3 eliminated
-      expect(eliminated).toHaveLength(3);
-      expect(survivors).toHaveLength(7);
-      // bottom 3 should be eliminated
+      const { survivors, eliminated } = eliminateStepped(ranked);
+      expect(eliminated).toHaveLength(0);
+      expect(survivors).toHaveLength(10);
+    });
+
+    it('should eliminate 2 lowest-fitness agents when population is 20-29', () => {
+      const agents = Array.from({ length: 25 }, (_, i) =>
+        makeAgent(`a${i + 1}`, { protectionRounds: 0, contributionScore: (i + 1) * 4, age: 1, reputation: 0.5 })
+      );
+      const ranked = evaluateFitness(agents);
+      const { survivors, eliminated } = eliminateStepped(ranked);
+      expect(eliminated).toHaveLength(2);
+      expect(survivors).toHaveLength(23);
+      // a1 and a2 have the lowest contributionScore -> lowest fitness
       const eliminatedIds = eliminated.map(e => e.id);
       expect(eliminatedIds).toContain('a1');
       expect(eliminatedIds).toContain('a2');
     });
 
-    it('should skip protected agents during elimination', () => {
-      const agents = [
-        makeAgent('a1', { protectionRounds: 2, contributionScore: 0 }),  // protected
-        makeAgent('a2', { protectionRounds: 0, contributionScore: 10 }), // normal
-      ];
+    it('should respect protection while population is below 30', () => {
+      // 25 agents: bottom-fitness one is protected, so the next-lowest is eliminated.
+      const agents = Array.from({ length: 25 }, (_, i) =>
+        makeAgent(`a${i + 1}`, { protectionRounds: 0, contributionScore: (i + 1) * 4, age: 1, reputation: 0.5 })
+      );
+      // Make a1 protected — a1 also has the lowest contributionScore.
+      agents[0].protectionRounds = 3;
       const ranked = evaluateFitness(agents);
-      const { survivors, eliminated } = eliminate(ranked, 0.5);
-      // a1 gets +20 protection: fitness = 0 + 2 + 0 + 20 = 22
-      // a2: fitness = 10*0.5 + 1*2 + 0*10 = 7
-      // a2 has lower fitness and no protection — gets eliminated
-      expect(eliminated).toHaveLength(1);
-      expect(eliminated[0].id).toBe('a2');
-      expect(survivors).toHaveLength(1);
-      expect(survivors[0].id).toBe('a1');
+      const { eliminated } = eliminateStepped(ranked);
+      const eliminatedIds = eliminated.map(e => e.id);
+      expect(eliminatedIds).not.toContain('a1');
+      expect(eliminatedIds).toHaveLength(2);
     });
 
-    it('should not eliminate fewer than 1 agent when there are many', () => {
-      const agents = [1,2,3,4,5].map(i =>
-        makeAgent(`a${i}`, { protectionRounds: 0, contributionScore: i * 10, age: i, reputation: i / 10 })
+    it('should ignore protection once population reaches 30', () => {
+      // 30 agents: a1 is protected but has dramatically lower fitness, so the
+      // +20 protection bonus still leaves it in the bottom 5 — and pop>=30
+      // means protection no longer shields it from elimination.
+      const agents = Array.from({ length: 30 }, (_, i) =>
+        makeAgent(`a${i + 1}`, { protectionRounds: 0, contributionScore: 100, age: 1, reputation: 0.5 })
       );
+      agents[0] = makeAgent('a1', { protectionRounds: 3, contributionScore: 0, age: 0, reputation: 0 });
       const ranked = evaluateFitness(agents);
-      const { survivors, eliminated } = eliminate(ranked, 0.3);
-      // 5 * 0.3 = 1.5 -> ceil to 2
-      expect(eliminated.length).toBeGreaterThanOrEqual(1);
-      expect(survivors.length + eliminated.length).toBe(5);
+      const { eliminated } = eliminateStepped(ranked);
+      expect(eliminated).toHaveLength(5);
+      expect(eliminated.map(e => e.id)).toContain('a1');
     });
   });
 

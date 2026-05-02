@@ -1,46 +1,16 @@
 import { describe, it, expect } from 'vitest';
-
-// ─── Test proposal ID extraction (inline test of the logic from supervisor/index.ts) ───
-
-function extractProposalId(text: string): string | null {
-  const uuidRe = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
-  const m = text.match(uuidRe);
-  return m ? m[0] : null;
-}
-
-function classifyReply(reply: { body: string; subject: string }): {
-  action: 'approve' | 'reject' | null;
-  proposalId: string | null;
-  reason: string;
-} {
-  const body = reply.body.trim();
-  const bodyLower = body.toLowerCase();
-  const subject = reply.subject;
-
-  const proposalId = extractProposalId(body) ?? extractProposalId(subject);
-
-  const approved =
-    bodyLower.startsWith('approve') ||
-    bodyLower.startsWith('同意') ||
-    bodyLower.startsWith('批准');
-  const rejected =
-    bodyLower.startsWith('reject') ||
-    bodyLower.startsWith('拒绝') ||
-    bodyLower.startsWith('不同意');
-
-  if (approved) return { action: 'approve', proposalId, reason: '' };
-  if (rejected) {
-    const reason = body
-      .replace(/^(reject|拒绝|不同意)\s*/i, '')
-      .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\s*/i, '')
-      .trim() || '用户拒绝';
-    return { action: 'reject', proposalId, reason };
-  }
-
-  return { action: null, proposalId: null, reason: '' };
-}
+import {
+  extractProposalId,
+  classifyReply,
+  computeApprovalToken,
+} from '../../src/supervisor/email-approval.js';
 
 const TEST_UUID = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
+const SECRET = 'test-secret';
+
+function reply(body: string, subject = 'Re: proposal') {
+  return { uid: '1', from: 'admin@test.com', subject, body };
+}
 
 describe('Email reply classification', () => {
   describe('extractProposalId', () => {
@@ -55,74 +25,93 @@ describe('Email reply classification', () => {
     it('returns null for text with no UUID', () => {
       expect(extractProposalId('approve everything please')).toBeNull();
     });
+  });
 
-    it('returns null for empty string', () => {
-      expect(extractProposalId('')).toBeNull();
+  describe('computeApprovalToken', () => {
+    it('produces a deterministic 16-char hex token', () => {
+      const t = computeApprovalToken(TEST_UUID, SECRET);
+      expect(t).toHaveLength(16);
+      expect(t).toMatch(/^[0-9a-f]{16}$/);
+      expect(computeApprovalToken(TEST_UUID, SECRET)).toBe(t);
+    });
+
+    it('different secrets produce different tokens', () => {
+      expect(computeApprovalToken(TEST_UUID, 'a')).not.toBe(
+        computeApprovalToken(TEST_UUID, 'b'),
+      );
+    });
+
+    it('different proposal ids produce different tokens', () => {
+      const otherUuid = 'b1b2c3d4-e5f6-7890-abcd-ef1234567890';
+      expect(computeApprovalToken(TEST_UUID, SECRET)).not.toBe(
+        computeApprovalToken(otherUuid, SECRET),
+      );
     });
   });
 
   describe('classifyReply', () => {
-    it('approves with matching proposalId', () => {
-      const result = classifyReply({
-        body: `approve ${TEST_UUID}`,
-        subject: 'Agent proposal',
-      });
-      expect(result.action).toBe('approve');
-      expect(result.proposalId).toBe(TEST_UUID);
+    const token = computeApprovalToken(TEST_UUID, SECRET);
+
+    it('approves with matching token', () => {
+      const r = classifyReply(reply(`approve ${TEST_UUID} ${token}`), SECRET);
+      expect(r.action).toBe('approve');
+      expect(r.proposalId).toBe(TEST_UUID);
     });
 
-    it('rejects with reason', () => {
-      const result = classifyReply({
-        body: `reject ${TEST_UUID} too expensive`,
-        subject: 'Re: proposal',
-      });
-      expect(result.action).toBe('reject');
-      expect(result.proposalId).toBe(TEST_UUID);
-      expect(result.reason).toBe('too expensive');
+    it('rejects with token + reason', () => {
+      const r = classifyReply(reply(`reject ${TEST_UUID} ${token} too expensive`), SECRET);
+      expect(r.action).toBe('reject');
+      expect(r.proposalId).toBe(TEST_UUID);
+      expect(r.reason).toBe('too expensive');
     });
 
-    it('approves in Chinese (同意)', () => {
-      const result = classifyReply({
-        body: `同意 ${TEST_UUID}`,
-        subject: '提案审批',
-      });
-      expect(result.action).toBe('approve');
-      expect(result.proposalId).toBe(TEST_UUID);
+    it('approves in Chinese with token', () => {
+      const r = classifyReply(reply(`同意 ${TEST_UUID} ${token}`), SECRET);
+      expect(r.action).toBe('approve');
+      expect(r.proposalId).toBe(TEST_UUID);
     });
 
-    it('rejects in Chinese (拒绝)', () => {
-      const result = classifyReply({
-        body: `拒绝 ${TEST_UUID} 不合理`,
-        subject: 'Re: 提案',
-      });
-      expect(result.action).toBe('reject');
-      expect(result.reason).toBe('不合理');
+    it('rejects unauthenticated reply (no token)', () => {
+      const r = classifyReply(reply(`approve ${TEST_UUID}`), SECRET);
+      expect(r.action).toBeNull();
+      expect(r.rejectionReason).toMatch(/token/i);
     });
 
-    it('finds proposalId in subject when body has no UUID', () => {
-      const result = classifyReply({
-        body: 'approve',
-        subject: `Proposal ${TEST_UUID} review`,
-      });
-      expect(result.action).toBe('approve');
-      expect(result.proposalId).toBe(TEST_UUID);
+    it('rejects reply with wrong token', () => {
+      const r = classifyReply(reply(`approve ${TEST_UUID} 0000000000000000`), SECRET);
+      expect(r.action).toBeNull();
+      expect(r.rejectionReason).toMatch(/token/i);
     });
 
-    it('returns null action when no command word found', () => {
-      const result = classifyReply({
-        body: `Looks good ${TEST_UUID}`,
-        subject: 'Re: proposal',
-      });
-      expect(result.action).toBeNull();
+    it('rejects reply where token came from a different secret', () => {
+      const other = computeApprovalToken(TEST_UUID, 'other-secret');
+      const r = classifyReply(reply(`approve ${TEST_UUID} ${other}`), SECRET);
+      expect(r.action).toBeNull();
+      expect(r.rejectionReason).toMatch(/token/i);
     });
 
-    it('returns null action when approved but no proposalId anywhere', () => {
-      const result = classifyReply({
-        body: 'approve',
-        subject: 'Re: hello',
-      });
-      expect(result.action).toBe('approve');
-      expect(result.proposalId).toBeNull(); // no UUID → won't match any proposal
+    it('returns null when secret is empty (email approval disabled)', () => {
+      const r = classifyReply(reply(`approve ${TEST_UUID} ${token}`), '');
+      expect(r.action).toBeNull();
+      expect(r.rejectionReason).toMatch(/EMAIL_APPROVAL_SECRET/);
+    });
+
+    it('returns null when no approve/reject keyword present', () => {
+      const r = classifyReply(reply(`Looks good ${TEST_UUID} ${token}`), SECRET);
+      expect(r.action).toBeNull();
+      expect(r.rejectionReason).toMatch(/keyword/i);
+    });
+
+    it('returns null when approve has no proposal id', () => {
+      const r = classifyReply(reply(`approve ${token}`), SECRET);
+      expect(r.action).toBeNull();
+      expect(r.rejectionReason).toMatch(/proposal id/i);
+    });
+
+    it('finds proposal id in subject when body has none', () => {
+      const r = classifyReply(reply(`approve ${token}`, `Re: proposal ${TEST_UUID}`), SECRET);
+      expect(r.action).toBe('approve');
+      expect(r.proposalId).toBe(TEST_UUID);
     });
   });
 });
@@ -141,16 +130,18 @@ describe('Config with email fields', () => {
     expect(config).toHaveProperty('notifyEmail');
     expect(config).toHaveProperty('pop3Host');
     expect(config).toHaveProperty('pop3Port');
+    expect(config).toHaveProperty('emailApprovalSecret');
 
     // Defaults when env vars are unset
     expect(config.smtpHost).toBe('smtp.163.com');
     expect(config.smtpPort).toBe(465);
     expect(config.pop3Host).toBe('pop.163.com');
     expect(config.pop3Port).toBe(995);
+    expect(config.emailApprovalSecret).toBe('');
   });
 });
 
-// ─── Test notifyUser API signature change ───
+// ─── Test notifyUser API signature ───
 
 describe('Notify config API', () => {
   it('NotifyConfig type has required fields', () => {

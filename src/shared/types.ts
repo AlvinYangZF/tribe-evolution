@@ -1,7 +1,7 @@
 export type Trait = 'curious' | 'cooperative' | 'aggressive' | 'lazy' | 'helpful' | 'explorer' | 'creative' | 'cautious';
 export type SkillName = 'web_search' | 'code_write' | 'data_analyze' | 'artifact_write' | 'observe' | 'propose';
 export type ResourceType = 'file_lock' | 'skill_package' | 'disk_quota' | 'tool_access' | 'data_set';
-export type EventType = 'token_allocated' | 'task_completed' | 'deal_kept' | 'deal_broken' | 'resource_locked' | 'resource_released' | 'agent_born' | 'agent_extinct' | 'mutation' | 'proposal_created' | 'proposal_approved' | 'proposal_rejected' | 'llm_call';
+export type EventType = 'token_allocated' | 'task_completed' | 'deal_kept' | 'deal_broken' | 'resource_locked' | 'resource_released' | 'agent_born' | 'agent_extinct' | 'mutation' | 'proposal_created' | 'proposal_approved' | 'proposal_rejected' | 'llm_call' | 'cycle_start' | 'cycle_end';
 export type MessagePriority = 'high' | 'normal' | 'low';
 export type DealStatus = 'open' | 'locked' | 'completed' | 'breached';
 
