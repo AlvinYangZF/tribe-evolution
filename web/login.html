@@ -37,8 +37,13 @@ body{font-family:system-ui,sans-serif;background:#0d1117;color:#e6edf3;display:f
   var qsApi = qs.get('api');
   if (qsApi) localStorage.setItem('tribe_api_url', qsApi);
   var apiUrl = (localStorage.getItem('tribe_api_url') || 'http://localhost:3000').replace(/\/$/, '');
+  var isLocal = location.hostname === 'localhost' || location.hostname === '127.0.0.1' || location.hostname === '[::1]';
+  if (!isLocal) {
+    apiUrl = '';
+    localStorage.removeItem('tribe_api_url');
+  }
   window.TRIBE_CONFIG = { apiUrl: apiUrl };
-  document.getElementById('api-info').textContent = 'api: ' + apiUrl;
+  document.getElementById('api-info').textContent = 'api: ' + (apiUrl || location.origin);
 })();
 
 var fails = 0, locked = 0;
