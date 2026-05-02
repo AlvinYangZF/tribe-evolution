@@ -11,6 +11,16 @@ let dashboard: ReturnType<typeof startDashboard>;
 let baseUrl: string;
 let wsUrl: string;
 
+// The dashboard reads `process.env.DASHBOARD_AUTH_TOKEN || 'tribe-admin'` at
+// module load time. Tests use the default token via this helper so every
+// REST call is authenticated.
+const AUTH_TOKEN = 'tribe-admin';
+function authedFetch(url: string, init: RequestInit = {}): Promise<Response> {
+  const headers = new Headers(init.headers);
+  headers.set('x-auth-token', AUTH_TOKEN);
+  return fetch(url, { ...init, headers });
+}
+
 async function seedAgents() {
   const agentsDir = path.join(TMP_DIR, 'agents');
   await fs.mkdir(agentsDir, { recursive: true });
@@ -74,21 +84,21 @@ describe('Dashboard Server', () => {
 
   describe('REST API', () => {
     it('GET /api/agents returns an array', async () => {
-      const res = await fetch(`${baseUrl}/api/agents`);
+      const res = await authedFetch(`${baseUrl}/api/agents`);
       expect(res.status).toBe(200);
       const body = await res.json();
       expect(Array.isArray(body)).toBe(true);
     });
 
     it('GET /api/events returns an array', async () => {
-      const res = await fetch(`${baseUrl}/api/events?limit=10`);
+      const res = await authedFetch(`${baseUrl}/api/events?limit=10`);
       expect(res.status).toBe(200);
       const body = await res.json();
       expect(Array.isArray(body)).toBe(true);
     });
 
     it('GET /api/market returns resources and deals', async () => {
-      const res = await fetch(`${baseUrl}/api/market`);
+      const res = await authedFetch(`${baseUrl}/api/market`);
       expect(res.status).toBe(200);
       const body = await res.json();
       expect(body).toHaveProperty('resources');
@@ -96,7 +106,7 @@ describe('Dashboard Server', () => {
     });
 
     it('GET /api/stats returns evolution statistics', async () => {
-      const res = await fetch(`${baseUrl}/api/stats`);
+      const res = await authedFetch(`${baseUrl}/api/stats`);
       expect(res.status).toBe(200);
       const body = await res.json();
       expect(body).toHaveProperty('averageFitness');
@@ -106,7 +116,7 @@ describe('Dashboard Server', () => {
     });
 
     it('GET /api/config returns system configuration', async () => {
-      const res = await fetch(`${baseUrl}/api/config`);
+      const res = await authedFetch(`${baseUrl}/api/config`);
       expect(res.status).toBe(200);
       const body = await res.json();
       expect(body).toHaveProperty('cycleIntervalMs');
@@ -115,7 +125,7 @@ describe('Dashboard Server', () => {
     });
 
     it('GET /api/agents/:id returns 404 for missing agent', async () => {
-      const res = await fetch(`${baseUrl}/api/agents/nonexistent`);
+      const res = await authedFetch(`${baseUrl}/api/agents/nonexistent`);
       expect(res.status).toBe(404);
     });
   });
@@ -173,7 +183,7 @@ describe('Dashboard Server', () => {
 
   describe('static files', () => {
     it('serves index.html', async () => {
-      const res = await fetch(`${baseUrl}/`);
+      const res = await authedFetch(`${baseUrl}/`);
       expect(res.status).toBe(200);
       const text = await res.text();
       expect(text).toContain('Tribe Evolution Dashboard');
@@ -182,18 +192,18 @@ describe('Dashboard Server', () => {
 
   describe('GET /api/events/:id', () => {
     it('returns 400 when no ID is provided', async () => {
-      const res = await fetch(`${baseUrl}/api/events/`);
+      const res = await authedFetch(`${baseUrl}/api/events/`);
       expect(res.status).toBe(400);
     });
 
     it('returns 404 for non-existent event index', async () => {
-      const res = await fetch(`${baseUrl}/api/events/9999`);
+      const res = await authedFetch(`${baseUrl}/api/events/9999`);
       expect(res.status).toBe(404);
     });
 
     it('returns event details with related events for valid index', async () => {
       // Event index 1 belongs to agent_001 (task_completed)
-      const res = await fetch(`${baseUrl}/api/events/2`);
+      const res = await authedFetch(`${baseUrl}/api/events/2`);
       expect(res.status).toBe(200);
       const body = await res.json();
       expect(body).toHaveProperty('event');
@@ -211,7 +221,7 @@ describe('Dashboard Server', () => {
     });
 
     it('returns event with prevHash and hash fields', async () => {
-      const res = await fetch(`${baseUrl}/api/events/0`);
+      const res = await authedFetch(`${baseUrl}/api/events/0`);
       expect(res.status).toBe(200);
       const body = await res.json();
       expect(body.event).toHaveProperty('prevHash');
@@ -221,7 +231,7 @@ describe('Dashboard Server', () => {
     });
 
     it('returns event with complete data fields', async () => {
-      const res = await fetch(`${baseUrl}/api/events/1`);
+      const res = await authedFetch(`${baseUrl}/api/events/1`);
       expect(res.status).toBe(200);
       const body = await res.json();
       expect(body.event.data).toEqual({ task: 'explore_terrain' });
@@ -230,7 +240,7 @@ describe('Dashboard Server', () => {
 
   describe('GET /api/events with type filter', () => {
     it('returns only events of the specified type', async () => {
-      const res = await fetch(`${baseUrl}/api/events?type=token_allocated`);
+      const res = await authedFetch(`${baseUrl}/api/events?type=token_allocated`);
       expect(res.status).toBe(200);
       const body = await res.json();
       expect(Array.isArray(body)).toBe(true);
@@ -239,7 +249,7 @@ describe('Dashboard Server', () => {
     });
 
     it('returns empty array for type with no events', async () => {
-      const res = await fetch(`${baseUrl}/api/events?type=deal_kept`);
+      const res = await authedFetch(`${baseUrl}/api/events?type=deal_kept`);
       expect(res.status).toBe(200);
       const body = await res.json();
       expect(Array.isArray(body)).toBe(true);
@@ -248,7 +258,7 @@ describe('Dashboard Server', () => {
     });
 
     it('returns empty array for non-existent type', async () => {
-      const res = await fetch(`${baseUrl}/api/events?type=nonexistent_type`);
+      const res = await authedFetch(`${baseUrl}/api/events?type=nonexistent_type`);
       expect(res.status).toBe(200);
       const body = await res.json();
       expect(Array.isArray(body)).toBe(true);
@@ -258,7 +268,7 @@ describe('Dashboard Server', () => {
 
   describe('GET /api/tree', () => {
     it('returns tree structure with nodes array', async () => {
-      const res = await fetch(`${baseUrl}/api/tree`);
+      const res = await authedFetch(`${baseUrl}/api/tree`);
       expect(res.status).toBe(200);
       const body = await res.json();
       expect(body).toHaveProperty('nodes');
@@ -267,7 +277,7 @@ describe('Dashboard Server', () => {
     });
 
     it('each node has required fields', async () => {
-      const res = await fetch(`${baseUrl}/api/tree`);
+      const res = await authedFetch(`${baseUrl}/api/tree`);
       const body = await res.json();
       for (const node of body.nodes) {
         expect(node).toHaveProperty('id');
@@ -280,7 +290,7 @@ describe('Dashboard Server', () => {
     });
 
     it('root node (generation 0) has parentId null', async () => {
-      const res = await fetch(`${baseUrl}/api/tree`);
+      const res = await authedFetch(`${baseUrl}/api/tree`);
       const body = await res.json();
       const root = body.nodes.find((n: any) => n.generation === 0);
       expect(root).toBeDefined();
@@ -288,7 +298,7 @@ describe('Dashboard Server', () => {
     });
 
     it('child nodes reference existing parent IDs', async () => {
-      const res = await fetch(`${baseUrl}/api/tree`);
+      const res = await authedFetch(`${baseUrl}/api/tree`);
       const body = await res.json();
       const ids = new Set(body.nodes.map((n: any) => n.id));
       for (const node of body.nodes) {
@@ -299,7 +309,7 @@ describe('Dashboard Server', () => {
     });
 
     it('node has correct fitness value', async () => {
-      const res = await fetch(`${baseUrl}/api/tree`);
+      const res = await authedFetch(`${baseUrl}/api/tree`);
       const body = await res.json();
       const agent = body.nodes.find((n: any) => n.id === 'agent_001');
       expect(agent).toBeDefined();
@@ -336,14 +346,14 @@ describe('Dashboard Server', () => {
 
   describe('Bounties API', () => {
     it('GET /api/bounties returns an array', async () => {
-      const res = await fetch(`${baseUrl}/api/bounties`);
+      const res = await authedFetch(`${baseUrl}/api/bounties`);
       expect(res.status).toBe(200);
       const body = await res.json();
       expect(Array.isArray(body)).toBe(true);
     });
 
     it('GET /api/bounties?status=open returns filtered results', async () => {
-      const res = await fetch(`${baseUrl}/api/bounties?status=open`);
+      const res = await authedFetch(`${baseUrl}/api/bounties?status=open`);
       expect(res.status).toBe(200);
       const body = await res.json();
       expect(Array.isArray(body)).toBe(true);
@@ -361,7 +371,7 @@ describe('Dashboard Server', () => {
         verificationTests: 'test_gc_race_condition',
         deadline: Date.now() + 7200000,
       };
-      const res = await fetch(`${baseUrl}/api/bounties`, {
+      const res = await authedFetch(`${baseUrl}/api/bounties`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newBounty),
@@ -377,7 +387,7 @@ describe('Dashboard Server', () => {
     });
 
     it('POST /api/bounties returns 400 for missing title', async () => {
-      const res = await fetch(`${baseUrl}/api/bounties`, {
+      const res = await authedFetch(`${baseUrl}/api/bounties`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ description: 'no title' }),
@@ -395,7 +405,7 @@ describe('Dashboard Server', () => {
         verificationTests: 'test_ftl_mapping',
         deadline: Date.now() + 3600000,
       };
-      const createRes = await fetch(`${baseUrl}/api/bounties`, {
+      const createRes = await authedFetch(`${baseUrl}/api/bounties`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newBounty),
@@ -403,7 +413,7 @@ describe('Dashboard Server', () => {
       const created = await createRes.json();
       const bountyId = created.id;
 
-      const res = await fetch(`${baseUrl}/api/bounties/${bountyId}`);
+      const res = await authedFetch(`${baseUrl}/api/bounties/${bountyId}`);
       expect(res.status).toBe(200);
       const body = await res.json();
       expect(body.id).toBe(bountyId);
@@ -412,13 +422,13 @@ describe('Dashboard Server', () => {
     });
 
     it('GET /api/bounties/:id returns 404 for non-existent bounty', async () => {
-      const res = await fetch(`${baseUrl}/api/bounties/nonexistent-id`);
+      const res = await authedFetch(`${baseUrl}/api/bounties/nonexistent-id`);
       expect(res.status).toBe(404);
     });
 
     it('POST /api/bounties/:id/bid creates a bid on a bounty', async () => {
       // First create a bounty
-      const createRes = await fetch(`${baseUrl}/api/bounties`, {
+      const createRes = await authedFetch(`${baseUrl}/api/bounties`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -431,7 +441,7 @@ describe('Dashboard Server', () => {
       });
       const bounty = await createRes.json();
 
-      const bidRes = await fetch(`${baseUrl}/api/bounties/${bounty.id}/bid`, {
+      const bidRes = await authedFetch(`${baseUrl}/api/bounties/${bounty.id}/bid`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -447,14 +457,14 @@ describe('Dashboard Server', () => {
       expect(bidBody.price).toBe(800);
 
       // Verify the bounty now has the bid
-      const getRes = await fetch(`${baseUrl}/api/bounties/${bounty.id}`);
+      const getRes = await authedFetch(`${baseUrl}/api/bounties/${bounty.id}`);
       const updatedBounty = await getRes.json();
       expect(updatedBounty.bids.length).toBe(1);
       expect(updatedBounty.bids[0].agentId).toBe('agent_001');
     });
 
     it('POST /api/bounties/:id/bid returns 404 for non-existent bounty', async () => {
-      const res = await fetch(`${baseUrl}/api/bounties/nonexistent/bid`, {
+      const res = await authedFetch(`${baseUrl}/api/bounties/nonexistent/bid`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ agentId: 'agent_001', price: 500, plan: 'test' }),
@@ -464,7 +474,7 @@ describe('Dashboard Server', () => {
 
     it('PUT /api/bounties/:id/award selects a winning bid', async () => {
       // Create bounty
-      const createRes = await fetch(`${baseUrl}/api/bounties`, {
+      const createRes = await authedFetch(`${baseUrl}/api/bounties`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -478,7 +488,7 @@ describe('Dashboard Server', () => {
       const bounty = await createRes.json();
 
       // Place a bid
-      const bidRes = await fetch(`${baseUrl}/api/bounties/${bounty.id}/bid`, {
+      const bidRes = await authedFetch(`${baseUrl}/api/bounties/${bounty.id}/bid`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ agentId: 'agent_002', price: 1500, plan: '我能做' }),
@@ -486,7 +496,7 @@ describe('Dashboard Server', () => {
       const bid = await bidRes.json();
 
       // Award the bid
-      const awardRes = await fetch(`${baseUrl}/api/bounties/${bounty.id}/award`, {
+      const awardRes = await authedFetch(`${baseUrl}/api/bounties/${bounty.id}/award`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ winningBidId: bid.id }),
@@ -498,7 +508,7 @@ describe('Dashboard Server', () => {
     });
 
     it('PUT /api/bounties/:id/award returns 404 for non-existent bounty', async () => {
-      const res = await fetch(`${baseUrl}/api/bounties/nonexistent/award`, {
+      const res = await authedFetch(`${baseUrl}/api/bounties/nonexistent/award`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ winningBidId: 'bid_xxx' }),

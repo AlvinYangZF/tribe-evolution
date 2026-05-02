@@ -674,13 +674,16 @@ const agentsDir = path.join(ecosystemDir, 'agents');
 
     // Serve dashboard
       if (pathname === '/' || pathname === '/index.html') {
-        // Serve dashboard if cookie present, else login
+        // Serve dashboard if authenticated by cookie OR x-auth-token header,
+        // else show the login page. Matches the rest of the auth middleware.
         const cookies = (req.headers['cookie'] || '').split(';').reduce((acc, c) => {
           const [k, v] = c.trim().split('=');
           if (k && v) acc[k] = v;
           return acc;
         }, {} as Record<string, string>);
-        if (cookies['tribe_token'] === AUTH_TOKEN) {
+        const headerToken = req.headers['x-auth-token'] || '';
+        const authed = cookies['tribe_token'] === AUTH_TOKEN || headerToken === AUTH_TOKEN;
+        if (authed) {
           filePath = path.join(__dirname, 'public', 'index.html');
         } else {
           // Serve login page
@@ -732,16 +735,8 @@ const agentsDir = path.join(ecosystemDir, 'agents');
   const wss = new WebSocketServer({ server, path: '/ws' });
 
   wss.on('connection', async (ws) => {
-    // Send initial snapshot
-    await refreshCache();
-    const snapshot: SnapshotData = {
-      type: 'snapshot',
-      agents: cachedAgents,
-      stats: cachedStats!,
-    };
-    ws.send(JSON.stringify(snapshot));
-
-    // Handle ping/pong
+    // Register the message handler BEFORE the await to avoid a race where a
+    // ping sent immediately after `open` arrives before the handler exists.
     ws.on('message', (raw) => {
       try {
         const msg = JSON.parse(raw.toString());
@@ -752,6 +747,15 @@ const agentsDir = path.join(ecosystemDir, 'agents');
         // ignore invalid messages
       }
     });
+
+    // Send initial snapshot
+    await refreshCache();
+    const snapshot: SnapshotData = {
+      type: 'snapshot',
+      agents: cachedAgents,
+      stats: cachedStats!,
+    };
+    ws.send(JSON.stringify(snapshot));
 
     // Periodic push every 2 seconds
     const interval = setInterval(async () => {

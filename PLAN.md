@@ -162,7 +162,15 @@ Deferred to a follow-up:
 - ⏭ D5 — extract elimination/reproduction constants to a config table.
 - ⏭ D6 — replace `parseDecision` ad-hoc validation with a Zod schema.
 - ⏭ C5 — persist `scheduler.currentCycle` to disk.
-- ⏭ C10 — fix `tests/unit/dashboard-server.test.ts` (31 failures from auth-without-test-headers); requires walking through the auth scheme and adding token headers everywhere.
+- ✅ C10 — done in PR-8.
+
+### PR-8: dashboard test auth + two server bugs revealed by C10 — ✅ DONE
+
+- ✅ Added `authedFetch` helper in `tests/unit/dashboard-server.test.ts` and replaced 35 `fetch(` call sites. Tests now send `x-auth-token: tribe-admin` (the server's default token).
+- ✅ Server bug 1: the `/` and `/index.html` routes only checked the `tribe_token` cookie for auth, while every other route accepts cookie OR `x-auth-token` header. Fixed to honor either, matching the rest of the middleware.
+- ✅ Server bug 2: `wss.on('connection', async (ws) => { await refreshCache(); ws.on('message', ...) })` had a race — a client that sent a ping immediately after `open` could arrive before the message handler was registered, dropping the ping. Moved the handler registration above the await.
+
+Result: **249/249 tests pass** — first green run since this branch was cut.
 
 ## Sequencing
 
