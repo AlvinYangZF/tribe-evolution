@@ -1407,20 +1407,44 @@ async function loadTree() {
     const tooltip = document.getElementById('tree-tooltip');
     const SVG_NS = 'http://www.w3.org/2000/svg';
 
-    // Group by generation
-    const byGeneration = {};
-    let maxGen = 0;
+    const byId = {};
+    nodes.forEach(n => { byId[n.id] = n; });
+
+    // ── Compute depth from the family tree ───────────────────────────
+    // Each node sits at row = max(depth of present parents) + 1, with
+    // founders (no parent in the dataset) at row 0. We use depth instead
+    // of the `generation` field (which is the cycle number when the agent
+    // was born) so children always sit exactly one row below their
+    // parents — even when reproduction skips cycles or the scheduler
+    // counter has advanced past the latest birth.
+    const depth = {};
+    const VISITING = -2;
+    function depthOf(n) {
+      const cached = depth[n.id];
+      if (cached !== undefined) return cached === VISITING ? 0 : cached;
+      depth[n.id] = VISITING;
+      const pids = (n.parentIds && n.parentIds.length > 0)
+        ? n.parentIds : (n.parentId ? [n.parentId] : []);
+      let maxParent = -1;
+      for (const pid of pids) {
+        if (byId[pid]) maxParent = Math.max(maxParent, depthOf(byId[pid]));
+      }
+      return depth[n.id] = maxParent + 1;
+    }
+    nodes.forEach(depthOf);
+
+    const byDepth = {};
+    let maxDepth = 0;
     for (const n of nodes) {
-      const g = n.generation || 0;
-      if (!byGeneration[g]) byGeneration[g] = [];
-      byGeneration[g].push(n);
-      if (g > maxGen) maxGen = g;
+      const d = depth[n.id];
+      (byDepth[d] = byDepth[d] || []).push(n);
+      if (d > maxDepth) maxDepth = d;
     }
 
     const NODE_W = 130, NODE_H = 56, H_GAP = 40, V_GAP = 90, MARGIN = 40;
-    const maxNodesInGen = Math.max(...Object.values(byGeneration).map(arr => arr.length), 1);
-    const w = Math.max(800, MARGIN * 2 + maxNodesInGen * NODE_W + (maxNodesInGen - 1) * H_GAP);
-    const h = MARGIN * 2 + (maxGen + 1) * V_GAP;
+    const maxNodesInRow = Math.max(...Object.values(byDepth).map(arr => arr.length), 1);
+    const w = Math.max(800, MARGIN * 2 + maxNodesInRow * NODE_W + (maxNodesInRow - 1) * H_GAP);
+    const h = MARGIN * 2 + (maxDepth + 1) * V_GAP;
 
     // viewBox zoom/pan
     const initialView = { x: 0, y: 0, w, h };
@@ -1495,22 +1519,47 @@ async function loadTree() {
       applyView();
     }
 
-    // Compute positions
+    // ── Position rows top-down so each row can sort siblings by parent x ──
+    // Children inherit a "preferred x" from their parents (mean of present
+    // parents' positions). Sorting by preferred x clusters siblings under
+    // the same parent and keeps family branches from crossing. Positions
+    // are stored as the top-left of each node (matching the renderer's
+    // translate() and the edge math below).
     const positions = {};
-    for (let g = 0; g <= maxGen; g++) {
-      const genNodes = byGeneration[g] || [];
-      if (!genNodes.length) continue;
-      const tw = genNodes.length * NODE_W + (genNodes.length - 1) * H_GAP;
-      const sx = (w - tw) / 2;
-      const y = MARGIN + g * V_GAP;
-      genNodes.forEach((n, i) => {
+    function preferredX(n) {
+      const pids = (n.parentIds && n.parentIds.length > 0)
+        ? n.parentIds : (n.parentId ? [n.parentId] : []);
+      let sum = 0, count = 0;
+      for (const pid of pids) {
+        const p = positions[pid];
+        if (p) { sum += p.x; count++; }
+      }
+      return count > 0 ? sum / count : 0;
+    }
+
+    for (let d = 0; d <= maxDepth; d++) {
+      const row = byDepth[d] || [];
+      if (row.length === 0) continue;
+      // Founders sort by id (no parents to pull from); descendants sort by
+      // mean parent x with id as a stable tiebreaker.
+      row.sort((a, b) => {
+        if (d > 0) {
+          const ax = preferredX(a), bx = preferredX(b);
+          if (ax !== bx) return ax - bx;
+        }
+        return a.id.localeCompare(b.id);
+      });
+      const totalW = row.length * NODE_W + (row.length - 1) * H_GAP;
+      const sx = (w - totalW) / 2;
+      const y = MARGIN + d * V_GAP;
+      row.forEach((n, i) => {
         positions[n.id] = { x: sx + i * (NODE_W + H_GAP), y };
       });
     }
 
     // Draw edges (Bezier)
-    for (let g = 1; g <= maxGen; g++) {
-      for (const n of (byGeneration[g] || [])) {
+    for (let d = 1; d <= maxDepth; d++) {
+      for (const n of (byDepth[d] || [])) {
         const pos = positions[n.id];
         if (!pos) continue;
         const pids = (n.parentIds && n.parentIds.length) ? n.parentIds : (n.parentId ? [n.parentId] : []);
