@@ -17,6 +17,48 @@ import type { AgentState } from '../shared/types.js';
 // Proposal cooldown tracker: agent must wait N cycles between proposals
 const agentLastProposal = new Map<string, number>();
 
+// Pending digest: auto-approved proposals queued for summary email
+const pendingDigest: Array<{id: string; agentId: string; title: string; status: string}> = [];
+
+/**
+ * Automatic proposal evaluation by Supervisor.
+ * Returns 'approve' for good proposals, 'reject' for bad ones, 'escalate' for human review.
+ */
+function evaluateProposal(proposal: { title: string; description: string; agentId: string; tokenCost: number }, agent: AgentState): { action: 'approve' | 'reject' | 'escalate'; reason: string } {
+  const text = (proposal.title + ' ' + proposal.description).toLowerCase();
+  const length = (proposal.title + proposal.description).length;
+
+  // Reject: too short/vague
+  if (length < 40) return { action: 'reject', reason: '内容过短，提案不够具体' };
+
+  // Reject: extremely long/spammy  
+  if (length > 5000) return { action: 'reject', reason: '提案内容过长，疑似垃圾信息' };
+
+  // Reject: low reputation agent requesting high tokens
+  if (agent.reputation < 0.3 && proposal.tokenCost > 1000) {
+    return { action: 'reject', reason: '信誉过低，无法申请高额资源' };
+  }
+
+  // Escalate: high token cost + high risk
+  if (proposal.tokenCost > 10000) {
+    return { action: 'escalate', reason: 'Token成本较高，需人工审核' };
+  }
+
+  // Escalate: contains sensitive keywords
+  const sensitive = ['delete', 'remove all', 'shutdown', 'hack', 'bypass', 'override auth'];
+  if (sensitive.some(k => text.includes(k))) {
+    return { action: 'escalate', reason: '提案涉及敏感操作，需人工审核' };
+  }
+
+  // Escalate: creative/novel proposals from high-performing agents
+  if (agent.reputation > 0.8 && agent.fitness > 70) {
+    return { action: 'approve', reason: '高信誉+高适应度agent，自动批准' };
+  }
+
+  // Default: approve simple, well-formed proposals
+  return { action: 'approve', reason: '提案格式和内容合格' };
+}
+
 /**
  * Extract a proposal ID from an email reply body or subject.
  * Matches patterns like:
@@ -132,13 +174,12 @@ async function decideForAgent(
     const reason = (decision.reasoning ?? '').slice(0, 60);
     console.log(`  🧠 ${agent.id} (${g.personaName}): ${decision.action} — ${reason}`);
 
-    // When agent chooses 'propose', actually create a proposal
+    // When agent chooses 'propose', create proposal and auto-evaluate
     // Cooldown: only propose every 5 cycles
     if (decision.action === 'propose') {
       const lastPropose = agentLastProposal.get(agent.id) || 0;
       if (cycleNum - lastPropose < 5) {
-        // Skip - still in cooldown
-        agent.contributionScore = 10; // base score for trying
+        agent.contributionScore = 10;
         return;
       }
       agentLastProposal.set(agent.id, cycleNum);
@@ -152,18 +193,31 @@ async function decideForAgent(
           tokenCost: 3000,
           tokenReward: 5000,
         });
-        // Email user immediately
-        notifyUser(notifyConfig, {
-          agentId: agent.id,
-          type: 'task_suggestion',
-          title,
-          description: decision.reasoning,
-          tokenCost: 3000,
-          proposalId: proposal.id,
-        }).catch(() => {});
-        console.log(`  📩 Proposal created & emailed: ${proposal.id}`);
+
+        // Auto-evaluate: Supervisor decides approve/reject/escalate
+        const evaluation = evaluateProposal(proposal, agent);
+        if (evaluation.action === 'approve') {
+          await proposalManager.approveProposal(proposal.id, 'supervisor');
+          agent.tokenBalance += proposal.tokenReward;
+          console.log(`  ✅ Auto-approved: ${proposal.id}`);
+          pendingDigest.push(proposal);
+        } else if (evaluation.action === 'reject') {
+          await proposalManager.rejectProposal(proposal.id, evaluation.reason, 'supervisor');
+          console.log(`  ❌ Auto-rejected: ${proposal.id} (${evaluation.reason})`);
+        } else {
+          // Escalate to user — send email
+          notifyUser(notifyConfig, {
+            agentId: agent.id,
+            type: 'task_suggestion',
+            title,
+            description: decision.reasoning,
+            tokenCost: 3000,
+            proposalId: proposal.id,
+          }).catch(() => {});
+          console.log(`  📩 Escalated to user: ${proposal.id}`);
+        }
       } catch {
-        // proposal creation failed, don't break the cycle
+        // proposal creation failed
       }
     }
   } catch (err: unknown) {
@@ -299,6 +353,34 @@ export class Supervisor extends EventEmitter {
 
     await this.scanProposals();
     await this.checkEmailReplies();
+
+    // Send digest email every 3 cycles with auto-approved proposals
+    if (cycleNum % 3 === 0 && pendingDigest.length > 0) {
+      const digestLines = [
+        '🧬 Tribe Evolution — 提案摘要',
+        '='.repeat(40),
+        `Cycle ${cycleNum} | ${alive.length} agents alive`,
+        '',
+        `Supervisor 自动审批了 ${pendingDigest.length} 条提案:`,
+      ];
+      for (const p of pendingDigest) {
+        digestLines.push(`  ${p.status === 'approved' ? '✅' : '❌'} [${p.agentId.slice(0,8)}] ${p.title.slice(0,60)}`);
+      }
+      digestLines.push('');
+      digestLines.push('📧 需要人工审核的提案已单独发送邮件。');
+      digestLines.push('🔗 Dashboard: http://yzftest.cpolar.top');
+
+      notifyUser(this.getNotifyConfig(), {
+        agentId: 'supervisor',
+        type: 'task_suggestion',
+        title: `Digest: ${pendingDigest.length} auto-approved proposals`,
+        description: digestLines.join('\n'),
+        proposalId: 'digest',
+      }).catch(() => {});
+      console.log(`  📧 Digest email sent: ${pendingDigest.length} proposals`);
+      pendingDigest.length = 0;
+    }
+
     const totalFitness = alive.reduce((s, a) => s + a.fitness, 0);
     const avgFitness = alive.length > 0 ? (totalFitness / alive.length).toFixed(1) : '0';
     console.log(`  📊 ${alive.length} alive, avg fitness: ${avgFitness}`);
