@@ -5,8 +5,8 @@ import { fileURLToPath } from 'node:url';
 import { randomBytes, createHash } from 'node:crypto';
 import { WebSocketServer, WebSocket } from 'ws';
 import { EventLog } from '../supervisor/event-log.js';
-import type { AgentState, EventLogEntry, Resource, Deal, EventType } from '../shared/types.js';
-import { safeReadJSON } from '../shared/filesystem.js';
+import type { AgentState, EventLogEntry, Resource, Deal, EventType, Bounty, BountyStatus, Bid } from '../shared/types.js';
+import { safeReadJSON, safeWriteJSON } from '../shared/filesystem.js';
 
 // ── ESM dirname shim ──────────────────────────────────────────────────────
 
@@ -260,6 +260,23 @@ export function startDashboard(ecosystemDir: string, port: number = 3000) {
     };
   }
 
+  // ── JSON body reader for POST/PUT ──
+
+  function readJSONBody(req: http.IncomingMessage): Promise<any> {
+    return new Promise((resolve, reject) => {
+      let raw = '';
+      req.on('data', (chunk: Buffer) => { raw += chunk.toString(); });
+      req.on('end', () => {
+        try {
+          resolve(raw ? JSON.parse(raw) : null);
+        } catch {
+          resolve(null);
+        }
+      });
+      req.on('error', reject);
+    });
+  }
+
   async function refreshCache(): Promise<void> {
     cachedAgents = await loadAgentSummaries();
     cachedStats = await computeStats(cachedAgents);
@@ -270,7 +287,7 @@ export function startDashboard(ecosystemDir: string, port: number = 3000) {
   const server = http.createServer(async (req, res) => {
     // CORS
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
     if (req.method === 'OPTIONS') {
@@ -281,6 +298,9 @@ export function startDashboard(ecosystemDir: string, port: number = 3000) {
 
     const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
     const pathname = url.pathname;
+
+    // ── Bounties file path ──
+    const bountiesPath = path.join(ecosystemDir, 'bounties', 'bounties.json');
 
     try {
       if (pathname === '/api/agents' && req.method === 'GET') {
@@ -363,6 +383,163 @@ export function startDashboard(ecosystemDir: string, port: number = 3000) {
         const tree = await loadTree();
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(tree));
+        return;
+      }
+
+      // ── Bounties ──
+
+      // GET /api/bounties?status=open
+      if (pathname === '/api/bounties' && req.method === 'GET') {
+        const status = url.searchParams.get('status') || undefined;
+        let bounties = (await safeReadJSON<Bounty[]>(bountiesPath)) || [];
+        if (status) {
+          bounties = bounties.filter(b => b.status === status);
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(bounties));
+        return;
+      }
+
+      // POST /api/bounties — create a new bounty
+      if (pathname === '/api/bounties' && req.method === 'POST') {
+        const body = await readJSONBody(req);
+        if (!body || !body.title) {
+          res.writeHead(400);
+          res.end(JSON.stringify({ error: 'Missing required fields (title)' }));
+          return;
+        }
+
+        const bounty: Bounty = {
+          id: `bounty_${randomBytes(4).toString('hex')}_${Date.now()}`,
+          title: body.title,
+          description: body.description || '',
+          type: body.type || 'other',
+          reward: body.reward || 0,
+          depositRate: 0.5,
+          status: 'open',
+          bids: [],
+          winningBidId: null,
+          verificationTests: [],
+          verifierAgentId: body.verifierAgentId || 'supervisor',
+          escrowFrozen: 0,
+          retryCount: 0,
+          maxRetries: 3,
+          creatorId: body.creatorId || 'system',
+          createdAt: Date.now(),
+          deadline: body.deadline || (Date.now() + 86400000),
+          completedAt: null,
+        };
+
+        const bounties = (await safeReadJSON<Bounty[]>(bountiesPath)) || [];
+        bounties.push(bounty);
+        await safeWriteJSON(bountiesPath, bounties);
+
+        res.writeHead(201, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(bounty));
+        return;
+      }
+
+      // GET /api/bounties/:id
+      if (pathname.startsWith('/api/bounties/') && req.method === 'GET') {
+        const bountyId = pathname.slice('/api/bounties/'.length);
+        if (!bountyId || bountyId.includes('/')) {
+          res.writeHead(404);
+          res.end(JSON.stringify({ error: 'Not found' }));
+          return;
+        }
+        const bounties = (await safeReadJSON<Bounty[]>(bountiesPath)) || [];
+        const bounty = bounties.find(b => b.id === bountyId);
+        if (!bounty) {
+          res.writeHead(404);
+          res.end(JSON.stringify({ error: 'Bounty not found' }));
+          return;
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(bounty));
+        return;
+      }
+
+      // POST /api/bounties/:id/bid
+      if (pathname.startsWith('/api/bounties/') && pathname.endsWith('/bid') && req.method === 'POST') {
+        const bountyId = pathname.slice('/api/bounties/'.length, -'/bid'.length);
+        if (!bountyId) {
+          res.writeHead(404);
+          res.end(JSON.stringify({ error: 'Not found' }));
+          return;
+        }
+        const bounties = (await safeReadJSON<Bounty[]>(bountiesPath)) || [];
+        const idx = bounties.findIndex(b => b.id === bountyId);
+        if (idx === -1) {
+          res.writeHead(404);
+          res.end(JSON.stringify({ error: 'Bounty not found' }));
+          return;
+        }
+
+        const body = await readJSONBody(req);
+        if (!body || !body.agentId || body.price === undefined || !body.plan) {
+          res.writeHead(400);
+          res.end(JSON.stringify({ error: 'Missing required fields (agentId, price, plan)' }));
+          return;
+        }
+
+        const bounty = bounties[idx];
+        const deposit = Math.floor(bounty.reward * bounty.depositRate);
+        const bid: Bid = {
+          id: `bid_${randomBytes(4).toString('hex')}_${Date.now()}`,
+          bountyId,
+          agentId: body.agentId,
+          price: body.price,
+          plan: body.plan,
+          deposit,
+          createdAt: Date.now(),
+        };
+
+        bounties[idx].bids.push(bid);
+        bounties[idx].status = 'bidding';
+        await safeWriteJSON(bountiesPath, bounties);
+
+        res.writeHead(201, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(bid));
+        return;
+      }
+
+      // PUT /api/bounties/:id/award
+      if (pathname.startsWith('/api/bounties/') && pathname.endsWith('/award') && req.method === 'PUT') {
+        const bountyId = pathname.slice('/api/bounties/'.length, -'/award'.length);
+        if (!bountyId) {
+          res.writeHead(404);
+          res.end(JSON.stringify({ error: 'Not found' }));
+          return;
+        }
+        const bounties = (await safeReadJSON<Bounty[]>(bountiesPath)) || [];
+        const idx = bounties.findIndex(b => b.id === bountyId);
+        if (idx === -1) {
+          res.writeHead(404);
+          res.end(JSON.stringify({ error: 'Bounty not found' }));
+          return;
+        }
+
+        const body = await readJSONBody(req);
+        if (!body || !body.winningBidId) {
+          res.writeHead(400);
+          res.end(JSON.stringify({ error: 'Missing winningBidId' }));
+          return;
+        }
+
+        const winningBid = bounties[idx].bids.find(b => b.id === body.winningBidId);
+        if (!winningBid) {
+          res.writeHead(400);
+          res.end(JSON.stringify({ error: 'Bid not found' }));
+          return;
+        }
+
+        bounties[idx].winningBidId = body.winningBidId;
+        bounties[idx].escrowFrozen = bounties[idx].reward;
+        bounties[idx].status = 'awarded';
+        await safeWriteJSON(bountiesPath, bounties);
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(bounties[idx]));
         return;
       }
 

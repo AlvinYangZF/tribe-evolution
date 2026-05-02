@@ -22,6 +22,10 @@ export interface Config {
   // POP3 (for checking email replies)
   pop3Host: string;
   pop3Port: number;
+  // Bounty system
+  bountyVerifierAgentId: string;
+  bountyDepositRate: number;
+  bountyMaxRetries: number;
 }
 
 /** Decode a value if it looks like base64, otherwise return as-is. */
@@ -57,5 +61,8 @@ export function loadConfig(): Config {
     notifyEmail: process.env.NOTIFY_EMAIL || '',
     pop3Host: process.env.POP3_HOST || 'pop.163.com',
     pop3Port: parseInt(process.env.POP3_PORT || '995', 10),
+    bountyVerifierAgentId: process.env.BOUNTY_VERIFIER_AGENT_ID || 'supervisor',
+    bountyDepositRate: parseFloat(process.env.BOUNTY_DEPOSIT_RATE || '0.5'),
+    bountyMaxRetries: parseInt(process.env.BOUNTY_MAX_RETRIES || '3', 10),
   };
 }

@@ -333,4 +333,177 @@ describe('Dashboard Server', () => {
       ws.close();
     });
   });
+
+  describe('Bounties API', () => {
+    it('GET /api/bounties returns an array', async () => {
+      const res = await fetch(`${baseUrl}/api/bounties`);
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(Array.isArray(body)).toBe(true);
+    });
+
+    it('GET /api/bounties?status=open returns filtered results', async () => {
+      const res = await fetch(`${baseUrl}/api/bounties?status=open`);
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(Array.isArray(body)).toBe(true);
+      for (const bounty of body) {
+        expect(bounty.status).toBe('open');
+      }
+    });
+
+    it('POST /api/bounties creates a new bounty', async () => {
+      const newBounty = {
+        title: '修复 GC 竞态条件',
+        description: '需要修复垃圾回收中的竞态条件问题',
+        type: 'bug',
+        reward: 5000,
+        verificationTests: 'test_gc_race_condition',
+        deadline: Date.now() + 7200000,
+      };
+      const res = await fetch(`${baseUrl}/api/bounties`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newBounty),
+      });
+      expect(res.status).toBe(201);
+      const body = await res.json();
+      expect(body).toHaveProperty('id');
+      expect(body.title).toBe('修复 GC 竞态条件');
+      expect(body.reward).toBe(5000);
+      expect(body.status).toBe('open');
+      expect(Array.isArray(body.bids)).toBe(true);
+      expect(body.bids.length).toBe(0);
+    });
+
+    it('POST /api/bounties returns 400 for missing title', async () => {
+      const res = await fetch(`${baseUrl}/api/bounties`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ description: 'no title' }),
+      });
+      expect(res.status).toBe(400);
+    });
+
+    it('GET /api/bounties/:id returns single bounty detail', async () => {
+      // First create a bounty
+      const newBounty = {
+        title: '实现 ftl 地址映射',
+        description: '需要实现 FTL 地址映射功能',
+        type: 'feature',
+        reward: 3000,
+        verificationTests: 'test_ftl_mapping',
+        deadline: Date.now() + 3600000,
+      };
+      const createRes = await fetch(`${baseUrl}/api/bounties`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newBounty),
+      });
+      const created = await createRes.json();
+      const bountyId = created.id;
+
+      const res = await fetch(`${baseUrl}/api/bounties/${bountyId}`);
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.id).toBe(bountyId);
+      expect(body.title).toBe('实现 ftl 地址映射');
+      expect(body).toHaveProperty('bids');
+    });
+
+    it('GET /api/bounties/:id returns 404 for non-existent bounty', async () => {
+      const res = await fetch(`${baseUrl}/api/bounties/nonexistent-id`);
+      expect(res.status).toBe(404);
+    });
+
+    it('POST /api/bounties/:id/bid creates a bid on a bounty', async () => {
+      // First create a bounty
+      const createRes = await fetch(`${baseUrl}/api/bounties`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: '竞标测试任务',
+          description: '测试竞标流程',
+          type: 'bug_fix',
+          reward: 1000,
+          deadline: Date.now() + 3600000,
+        }),
+      });
+      const bounty = await createRes.json();
+
+      const bidRes = await fetch(`${baseUrl}/api/bounties/${bounty.id}/bid`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          agentId: 'agent_001',
+          price: 800,
+          plan: '我将在 2 小时内完成',
+        }),
+      });
+      expect(bidRes.status).toBe(201);
+      const bidBody = await bidRes.json();
+      expect(bidBody).toHaveProperty('id');
+      expect(bidBody.agentId).toBe('agent_001');
+      expect(bidBody.price).toBe(800);
+
+      // Verify the bounty now has the bid
+      const getRes = await fetch(`${baseUrl}/api/bounties/${bounty.id}`);
+      const updatedBounty = await getRes.json();
+      expect(updatedBounty.bids.length).toBe(1);
+      expect(updatedBounty.bids[0].agentId).toBe('agent_001');
+    });
+
+    it('POST /api/bounties/:id/bid returns 404 for non-existent bounty', async () => {
+      const res = await fetch(`${baseUrl}/api/bounties/nonexistent/bid`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ agentId: 'agent_001', price: 500, plan: 'test' }),
+      });
+      expect(res.status).toBe(404);
+    });
+
+    it('PUT /api/bounties/:id/award selects a winning bid', async () => {
+      // Create bounty
+      const createRes = await fetch(`${baseUrl}/api/bounties`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: '中标测试任务',
+          description: '测试中标流程',
+          type: 'bug_fix',
+          reward: 2000,
+          deadline: Date.now() + 3600000,
+        }),
+      });
+      const bounty = await createRes.json();
+
+      // Place a bid
+      const bidRes = await fetch(`${baseUrl}/api/bounties/${bounty.id}/bid`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ agentId: 'agent_002', price: 1500, plan: '我能做' }),
+      });
+      const bid = await bidRes.json();
+
+      // Award the bid
+      const awardRes = await fetch(`${baseUrl}/api/bounties/${bounty.id}/award`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ winningBidId: bid.id }),
+      });
+      expect(awardRes.status).toBe(200);
+      const awarded = await awardRes.json();
+      expect(awarded.winningBidId).toBe(bid.id);
+      expect(awarded.status).toBe('awarded');
+    });
+
+    it('PUT /api/bounties/:id/award returns 404 for non-existent bounty', async () => {
+      const res = await fetch(`${baseUrl}/api/bounties/nonexistent/award`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ winningBidId: 'bid_xxx' }),
+      });
+      expect(res.status).toBe(404);
+    });
+  });
 });

@@ -129,6 +129,58 @@ export interface ExpressedGenome {
   communicationFreq: number;
 }
 
+// ─── Bounty types ────────────────────────────────────────────────────────
+
+export type BountyStatus = 'open' | 'bidding' | 'awarded' | 'executing' | 'verifying' | 'completed';
+export type BountyType = 'bug_fix' | 'feature' | 'research' | 'data_analysis' | 'code_review' | 'other';
+export type TestType = 'shell_test' | 'file_check' | 'api_check' | 'llm_review';
+
+export interface VerificationTest {
+  type: TestType;
+  description: string;
+  command?: string;        // for shell_test
+  filePath?: string;       // for file_check
+  expectedContent?: string;// for file_check
+  url?: string;            // for api_check
+  expectedStatus?: number; // for api_check
+  prompt?: string;         // for llm_review
+}
+
+export interface Bid {
+  id: string;
+  bountyId: string;
+  agentId: string;
+  price: number;
+  plan: string;            // agent's proposal for how to complete
+  deposit: number;         // deposit amount (reward * depositRate)
+  createdAt: number;
+}
+
+export interface Bounty {
+  id: string;
+  title: string;
+  description: string;
+  creatorId: string;
+  type: BountyType;
+  reward: number;
+  depositRate: number;     // 0.5 = 50%
+
+  status: BountyStatus;
+  bids: Bid[];
+  winningBidId: string | null;
+
+  verificationTests: VerificationTest[];
+  verifierAgentId: string;
+
+  escrowFrozen: number;     // frozen reward
+  retryCount: number;       // verification retry count
+  maxRetries: number;       // default 3
+
+  createdAt: number;
+  deadline: number;
+  completedAt: number | null;
+}
+
 // ─── Proposal types ───────────────────────────────────────────────────────
 
 export type ProposalType = 'new_skill' | 'task_suggestion' | 'policy_change' | 'resource_request';

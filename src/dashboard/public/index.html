@@ -418,6 +418,236 @@
     .tree-node { transition: transform 0.12s ease; }
     .tree-node:hover { transform: translateY(-2px); }
 
+    /* ── Bounties Panel ── */
+    #bounties-panel h2 {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .bounty-create-btn {
+      background: var(--accent-dim);
+      color: var(--accent);
+      border: 1px solid var(--accent);
+      padding: 4px 12px;
+      border-radius: 6px;
+      font-size: 0.78rem;
+      cursor: pointer;
+      transition: all 0.2s;
+      white-space: nowrap;
+    }
+    .bounty-create-btn:hover {
+      background: var(--accent);
+      color: #fff;
+    }
+
+    .bounty-tabs {
+      display: flex;
+      gap: 4px;
+      margin-bottom: 12px;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 8px;
+    }
+    .bounty-tab {
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      padding: 4px 12px;
+      border-radius: 4px;
+      font-size: 0.82rem;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .bounty-tab:hover {
+      color: var(--text-primary);
+      background: var(--bg-hover);
+    }
+    .bounty-tab.active {
+      color: var(--accent);
+      background: var(--accent-dim);
+    }
+
+    #bounty-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 8px;
+      max-height: 60vh;
+      overflow-y: auto;
+    }
+    #bounty-grid::-webkit-scrollbar { width: 6px; }
+    #bounty-grid::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+    .bounty-card {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-left: 3px solid var(--accent);
+      border-radius: 6px;
+      padding: 12px;
+      cursor: pointer;
+      transition: border-color 0.2s, background 0.2s;
+    }
+    .bounty-card:hover {
+      background: var(--bg-hover);
+      border-color: var(--text-muted);
+    }
+    .bounty-card.status-open { border-left-color: var(--accent); }
+    .bounty-card.status-bidding { border-left-color: var(--yellow); }
+    .bounty-card.status-executing { border-left-color: var(--blue); }
+    .bounty-card.status-completed { border-left-color: var(--text-muted); }
+
+    .bounty-card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 6px;
+    }
+    .bounty-card-title {
+      font-weight: 600;
+      font-size: 0.9rem;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      flex: 1;
+    }
+    .bounty-card-reward {
+      font-size: 0.82rem;
+      color: var(--yellow);
+      white-space: nowrap;
+      margin-left: 8px;
+    }
+    .bounty-card-meta {
+      display: flex;
+      gap: 12px;
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      align-items: center;
+    }
+    .bounty-card-type {
+      padding: 1px 6px;
+      border-radius: 3px;
+      background: var(--bg-primary);
+      border: 1px solid var(--border);
+      font-size: 0.7rem;
+    }
+    .bounty-card-status-label {
+      font-size: 0.7rem;
+      padding: 1px 6px;
+      border-radius: 3px;
+      font-weight: 500;
+    }
+    .bounty-card-status-label.open { background: var(--accent-dim); color: var(--accent); }
+    .bounty-card-status-label.bidding { background: #3f351a; color: var(--yellow); }
+    .bounty-card-status-label.executing { background: #1a335f; color: var(--blue); }
+    .bounty-card-status-label.completed { background: #21262d; color: var(--text-muted); }
+
+    /* ── Bounty Form ── */
+    .form-group {
+      margin-bottom: 12px;
+    }
+    .form-label {
+      display: block;
+      font-size: 0.8rem;
+      color: var(--text-secondary);
+      margin-bottom: 4px;
+    }
+    .form-input {
+      width: 100%;
+      background: var(--bg-primary);
+      border: 1px solid var(--border);
+      color: var(--text-primary);
+      padding: 8px 10px;
+      border-radius: 6px;
+      font-size: 0.85rem;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    .form-input:focus {
+      border-color: var(--accent-dim);
+    }
+    .form-input::placeholder {
+      color: var(--text-muted);
+    }
+    .form-textarea {
+      resize: vertical;
+      font-family: inherit;
+    }
+    .form-row {
+      display: flex;
+      gap: 12px;
+    }
+    select.form-input {
+      cursor: pointer;
+    }
+    select.form-input option {
+      background: var(--bg-card);
+      color: var(--text-primary);
+    }
+    input[type="datetime-local"].form-input {
+      color-scheme: dark;
+    }
+
+    .bounty-btn {
+      padding: 8px 16px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      font-size: 0.85rem;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .bounty-btn-primary {
+      background: var(--accent-dim);
+      color: var(--accent);
+      border-color: var(--accent);
+    }
+    .bounty-btn-primary:hover {
+      background: var(--accent);
+      color: #fff;
+    }
+    .bounty-btn-secondary {
+      background: var(--bg-hover);
+      color: var(--text-secondary);
+    }
+    .bounty-btn-secondary:hover {
+      color: var(--text-primary);
+    }
+
+    /* ── Bounty Detail in Modal ── */
+    .bounty-detail-section {
+      margin-top: 16px;
+    }
+    .bounty-detail-section h4 {
+      font-size: 0.85rem;
+      color: var(--text-secondary);
+      margin-bottom: 8px;
+      font-weight: 500;
+    }
+    .bid-card {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 10px;
+      margin-bottom: 6px;
+    }
+    .bid-card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 4px;
+    }
+    .bid-agent {
+      font-weight: 600;
+      font-size: 0.82rem;
+      color: var(--blue);
+    }
+    .bid-price {
+      font-size: 0.82rem;
+      color: var(--yellow);
+    }
+    .bid-plan {
+      font-size: 0.78rem;
+      color: var(--text-secondary);
+      margin-top: 4px;
+    }
+
     /* ── Empty State ── */
     .empty-state {
       text-align: center;
@@ -544,6 +774,85 @@
     </section>
 
   </section>
+
+  <!-- Bounties Panel -->
+  <section class="card" id="bounties-panel">
+    <h2>
+      💰 Bounties
+      <button id="btn-create-bounty" class="bounty-create-btn" onclick="openCreateBountyModal()">＋ 发布悬赏</button>
+    </h2>
+
+    <!-- Status Tabs -->
+    <div class="bounty-tabs">
+      <button class="bounty-tab active" data-status="open" onclick="switchBountyTab('open')">🟢 open</button>
+      <button class="bounty-tab" data-status="bidding" onclick="switchBountyTab('bidding')">🟡 bidding</button>
+      <button class="bounty-tab" data-status="executing" onclick="switchBountyTab('executing')">🔵 executing</button>
+      <button class="bounty-tab" data-status="completed" onclick="switchBountyTab('completed')">⚪ completed</button>
+    </div>
+
+    <!-- Bounty Cards Container -->
+    <div id="bounty-grid">
+      <div class="empty-state"><em>💰</em>No bounties yet</div>
+    </div>
+  </section>
+
+  <!-- Bounty Detail Modal -->
+  <div id="bounty-modal" class="modal-overlay">
+    <div class="modal">
+      <h3>
+        <span id="bounty-modal-title">💰 Bounty Details</span>
+        <button class="modal-close" onclick="closeBountyModal()">✕</button>
+      </h3>
+      <div id="bounty-modal-body"></div>
+    </div>
+  </div>
+
+  <!-- Create Bounty Modal -->
+  <div id="create-bounty-modal" class="modal-overlay">
+    <div class="modal">
+      <h3>
+        <span>📝 发布悬赏</span>
+        <button class="modal-close" onclick="closeCreateBountyModal()">✕</button>
+      </h3>
+      <div id="create-bounty-body">
+        <div class="form-group">
+          <label class="form-label">标题 *</label>
+          <input id="bounty-form-title" class="form-input" type="text" placeholder="悬赏标题" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">描述</label>
+          <textarea id="bounty-form-desc" class="form-input form-textarea" placeholder="详细描述..." rows="3"></textarea>
+        </div>
+        <div class="form-row">
+          <div class="form-group" style="flex:1">
+            <label class="form-label">类型</label>
+            <select id="bounty-form-type" class="form-input">
+              <option value="bug">🐛 Bug 修复</option>
+              <option value="feature">✨ 新功能</option>
+              <option value="task">📋 任务</option>
+              <option value="optimization">⚡ 优化</option>
+            </select>
+          </div>
+          <div class="form-group" style="flex:1">
+            <label class="form-label">奖励 (token) *</label>
+            <input id="bounty-form-reward" class="form-input" type="number" min="1" placeholder="1000" />
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">验证脚本</label>
+          <input id="bounty-form-tests" class="form-input" type="text" placeholder="test_xxx" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">截止时间</label>
+          <input id="bounty-form-deadline" class="form-input" type="datetime-local" />
+        </div>
+        <div style="display:flex;gap:8px;margin-top:16px;justify-content:flex-end">
+          <button class="bounty-btn bounty-btn-secondary" onclick="closeCreateBountyModal()">取消</button>
+          <button class="bounty-btn bounty-btn-primary" onclick="submitBounty()">发布悬赏</button>
+        </div>
+      </div>
+    </div>
+  </div>
 
   <!-- Evolution Tree -->
   <section class="card tree-panel">
@@ -1200,6 +1509,274 @@ function connectWS() {
     ws.close();
   };
 }
+
+// ── Bounties ──
+
+let currentBountyTab = 'open';
+let bountiesData = [];
+
+// ── Bounty Status Helpers ──
+const BOUNTY_TYPE_ICON = { bug: '🐛', feature: '✨', task: '📋', optimization: '⚡' };
+const BOUNTY_STATUS_ICON = { open: '🟢', bidding: '🟡', executing: '🔵', completed: '⚪' };
+
+function getStatusIcon(status) { return BOUNTY_STATUS_ICON[status] || '⚪'; }
+function getTypeIcon(type) { return BOUNTY_TYPE_ICON[type] || '📌'; }
+
+function formatTimeRemaining(deadline) {
+  const diff = deadline - Date.now();
+  if (diff <= 0) return '已截止';
+  const h = Math.floor(diff / 3600000);
+  const m = Math.floor((diff % 3600000) / 60000);
+  if (h >= 24) return `${Math.floor(h/24)}d ${h%24}h`;
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
+}
+
+// ── Tab Switching ──
+
+function switchBountyTab(status) {
+  currentBountyTab = status;
+  document.querySelectorAll('.bounty-tab').forEach(t => {
+    t.classList.toggle('active', t.dataset.status === status);
+  });
+  renderBounties();
+}
+
+// ── Render Bounties ──
+
+function renderBounties() {
+  const grid = document.getElementById('bounty-grid');
+  const filtered = bountiesData.filter(b => b.status === currentBountyTab);
+
+  if (filtered.length === 0) {
+    grid.innerHTML = `<div class="empty-state"><em>💰</em>No ${currentBountyTab} bounties</div>`;
+    return;
+  }
+
+  grid.innerHTML = filtered.map(bounty => {
+    const icon = getTypeIcon(bounty.type);
+    const deadlineStr = formatTimeRemaining(bounty.deadline);
+    const bidCount = (bounty.bids || []).length;
+    const statusIcon = getStatusIcon(bounty.status);
+
+    return `
+      <div class="bounty-card status-${bounty.status}" onclick="openBountyDetail('${bounty.id}')">
+        <div class="bounty-card-header">
+          <span class="bounty-card-title">${icon} ${escapeHtml(bounty.title)}</span>
+          <span class="bounty-card-reward">💰${bounty.reward}</span>
+        </div>
+        <div class="bounty-card-meta">
+          <span class="bounty-card-type">${escapeHtml(bounty.type)}</span>
+          <span>⏱ ${deadlineStr}</span>
+          <span>${bidCount > 0 ? `${bidCount} bids` : '0 bid'}</span>
+          <span class="bounty-card-status-label ${bounty.status}">${statusIcon} ${bounty.status}</span>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function escapeHtml(str) {
+  if (!str) return '';
+  return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ── Load Bounties ──
+
+async function loadBounties() {
+  try {
+    const res = await fetch('/api/bounties');
+    if (res.ok) {
+      bountiesData = await res.json();
+      renderBounties();
+    }
+  } catch (err) {
+    console.error('Failed to load bounties:', err);
+  }
+}
+
+// ── Bounty Detail Modal ──
+
+async function openBountyDetail(bountyId) {
+  try {
+    const res = await fetch(`/api/bounties/${bountyId}`);
+    if (!res.ok) return;
+    const bounty = await res.json();
+
+    const deadlineStr = formatTimeRemaining(bounty.deadline);
+    const typeIcon = getTypeIcon(bounty.type);
+    const statusIcon = getStatusIcon(bounty.status);
+    const bidCount = (bounty.bids || []).length;
+
+    let bidsHtml = '';
+    if (bounty.bids && bounty.bids.length > 0) {
+      bidsHtml = '<div class="bounty-detail-section"><h4>📋 Bids (' + bidCount + ')</h4>' +
+        bounty.bids.map(b => {
+          const winningBadge = b.id === bounty.winningBidId ? ' <span style="color:var(--accent);font-size:0.7rem">🏆 中标</span>' : '';
+          return `
+            <div class="bid-card">
+              <div class="bid-card-header">
+                <span class="bid-agent">🤖 ${escapeHtml(b.agentId)}</span>
+                <span class="bid-price">💰${b.price}${winningBadge}</span>
+              </div>
+              <div class="bid-plan">${escapeHtml(b.plan)}</div>
+            </div>
+          `;
+        }).join('') +
+        '</div>';
+    } else {
+      bidsHtml = '<div class="bounty-detail-section"><h4>📋 Bids</h4><p style="color:var(--text-muted);font-size:0.82rem">暂无竞标</p></div>';
+    }
+
+    const descHtml = bounty.description
+      ? `<div class="bounty-detail-section"><h4>📝 描述</h4><p style="font-size:0.85rem;color:var(--text-secondary)">${escapeHtml(bounty.description)}</p></div>`
+      : '';
+
+    document.getElementById('bounty-modal-title').textContent = `💰 ${typeIcon} ${escapeHtml(bounty.title)}`;
+    document.getElementById('bounty-modal-body').innerHTML = `
+      <div class="modal-detail-row">
+        <span class="modal-detail-label">状态</span>
+        <span class="modal-detail-value">${statusIcon} ${bounty.status}</span>
+      </div>
+      <div class="modal-detail-row">
+        <span class="modal-detail-label">类型</span>
+        <span class="modal-detail-value">${escapeHtml(bounty.type)}</span>
+      </div>
+      <div class="modal-detail-row">
+        <span class="modal-detail-label">奖励</span>
+        <span class="modal-detail-value" style="color:var(--yellow)">💰${bounty.reward} token</span>
+      </div>
+      <div class="modal-detail-row">
+        <span class="modal-detail-label">截止</span>
+        <span class="modal-detail-value">${new Date(bounty.deadline).toLocaleString()} (${deadlineStr})</span>
+      </div>
+      <div class="modal-detail-row">
+        <span class="modal-detail-label">验证</span>
+        <span class="modal-detail-value" style="font-family:monospace;font-size:0.78rem">${escapeHtml(bounty.verificationTests || '—')}</span>
+      </div>
+      <div class="modal-detail-row">
+        <span class="modal-detail-label">创建者</span>
+        <span class="modal-detail-value">${escapeHtml(bounty.creatorAgentId || 'system')}</span>
+      </div>
+      ${descHtml}
+      ${bidsHtml}
+    `;
+    document.getElementById('bounty-modal').classList.add('active');
+  } catch (err) {
+    console.error('Failed to load bounty detail:', err);
+  }
+}
+
+function closeBountyModal() {
+  document.getElementById('bounty-modal').classList.remove('active');
+}
+
+// Close bounty modal on overlay click
+document.getElementById('bounty-modal').addEventListener('click', (e) => {
+  if (e.target === e.currentTarget) closeBountyModal();
+});
+
+// ── Create Bounty Modal ──
+
+function openCreateBountyModal() {
+  // Set default deadline to 24h from now
+  const now = new Date();
+  const deadline = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+  const localStr = deadline.toISOString().slice(0, 16);
+  document.getElementById('bounty-form-deadline').value = localStr;
+  document.getElementById('bounty-form-title').value = '';
+  document.getElementById('bounty-form-desc').value = '';
+  document.getElementById('bounty-form-type').value = 'bug';
+  document.getElementById('bounty-form-reward').value = '';
+  document.getElementById('bounty-form-tests').value = '';
+  document.getElementById('create-bounty-modal').classList.add('active');
+}
+
+function closeCreateBountyModal() {
+  document.getElementById('create-bounty-modal').classList.remove('active');
+}
+
+document.getElementById('create-bounty-modal').addEventListener('click', (e) => {
+  if (e.target === e.currentTarget) closeCreateBountyModal();
+});
+
+async function submitBounty() {
+  const title = document.getElementById('bounty-form-title').value.trim();
+  if (!title) {
+    alert('请输入悬赏标题');
+    return;
+  }
+
+  const rewardStr = document.getElementById('bounty-form-reward').value.trim();
+  const reward = parseInt(rewardStr, 10);
+  if (!rewardStr || isNaN(reward) || reward < 1) {
+    alert('请输入有效的奖励 token 数量');
+    return;
+  }
+
+  const deadlineInput = document.getElementById('bounty-form-deadline').value;
+  let deadline = Date.now() + 86400000;
+  if (deadlineInput) {
+    deadline = new Date(deadlineInput).getTime();
+  }
+
+  const payload = {
+    title,
+    description: document.getElementById('bounty-form-desc').value.trim(),
+    type: document.getElementById('bounty-form-type').value,
+    reward,
+    verificationTests: document.getElementById('bounty-form-tests').value.trim(),
+    deadline,
+  };
+
+  try {
+    const res = await fetch('/api/bounties', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+
+    if (res.ok) {
+      const created = await res.json();
+      closeCreateBountyModal();
+      await loadBounties();
+      // Switch to open tab to see the new bounty
+      switchBountyTab('open');
+    } else {
+      const err = await res.json();
+      alert('创建失败: ' + (err.error || '未知错误'));
+    }
+  } catch (err) {
+    console.error('Failed to create bounty:', err);
+    alert('创建失败，请重试');
+  }
+}
+
+// ── Integrate bounties into existing polling ──
+
+// Extend the existing pollTimer to also load bounties
+const origStartPolling = startPolling;
+startPolling = function() {
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(async () => {
+    try {
+      const [agents, stats] = await Promise.all([
+        fetch('/api/agents').then(r => r.json()),
+        fetch('/api/stats').then(r => r.json()),
+      ]);
+      updateDashboard({ agents, stats });
+      loadTree();
+    } catch (err) {}
+    // Also load bounties on each poll cycle
+    loadBounties();
+  }, 5000);
+};
+
+// Also add bounties to the initial load
+const origLoadInitialData = loadInitialData;
+loadInitialData = function() {
+  return origLoadInitialData().then(() => loadBounties());
+};
 
 // ── Bootstrap ──
 loadInitialData().then(() => connectWS());
