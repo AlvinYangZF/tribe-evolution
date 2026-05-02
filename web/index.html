@@ -220,67 +220,121 @@
     .agent-card {
       background: var(--bg-secondary);
       border: 1px solid var(--border);
+      border-left: 3px solid transparent;  /* role color on render */
       border-radius: 6px;
-      padding: 10px;
-      transition: border-color 0.2s, background 0.2s;
+      padding: 10px 12px;
+      transition: border-color 0.2s, background 0.2s, transform 0.15s;
       cursor: default;
     }
-    .agent-card:hover { border-color: var(--accent-dim); background: var(--bg-hover); }
-    .agent-card.dead { opacity: 0.5; }
+    .agent-card:hover { border-color: var(--accent-dim); background: var(--bg-hover); transform: translateY(-1px); }
+    .agent-card.dead {
+      opacity: 0.6;
+      filter: grayscale(0.4);
+    }
+    .agent-card.dead .agent-name { text-decoration: line-through; text-decoration-color: var(--red); }
+
     .agent-card-header {
       display: flex;
       align-items: center;
       gap: 8px;
-      margin-bottom: 6px;
+      margin-bottom: 4px;
     }
     .agent-avatar {
-      width: 28px; height: 28px; border-radius: 50%;
+      width: 32px; height: 32px; border-radius: 50%;
       display: flex; align-items: center; justify-content: center;
-      font-size: 0.75rem; font-weight: 700; color: #fff;
+      font-size: 0.85rem; font-weight: 700; color: #fff;
       flex-shrink: 0;
+      box-shadow: 0 0 0 2px rgba(255,255,255,0.04);
     }
     .agent-name {
       font-weight: 600;
       font-size: 0.85rem;
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      flex: 1;
+      min-width: 0;
     }
-    .agent-role {
+    .agent-life-pill {
+      font-size: 0.65rem;
+      padding: 2px 6px;
+      border-radius: 10px;
+      font-weight: 600;
+      flex-shrink: 0;
+      border: 1px solid;
+    }
+    .agent-life-pill.alive { color: var(--accent); border-color: var(--accent-dim); background: rgba(35,134,54,0.12); }
+    .agent-life-pill.dead { color: var(--red); border-color: rgba(248,81,73,0.4); background: rgba(248,81,73,0.10); }
+
+    .agent-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      margin-bottom: 8px;
       font-size: 0.7rem;
       color: var(--text-muted);
-      margin-left: auto;
     }
-    .agent-stats {
+    .agent-meta span {
+      padding: 1px 6px;
+      border-radius: 3px;
+      background: var(--bg-primary);
+      border: 1px solid var(--border);
+    }
+    .agent-meta .agent-meta-role { color: var(--text-secondary); font-weight: 600; }
+    .agent-meta .gender-male { color: #58a6ff; }
+    .agent-meta .gender-female { color: #ff7eb6; }
+
+    .agent-bar-row {
       display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 2px 8px;
-      font-size: 0.78rem;
+      grid-template-columns: 50px 1fr auto;
+      gap: 6px;
+      align-items: center;
+      font-size: 0.72rem;
+      margin-bottom: 4px;
     }
-    .agent-stat { display: flex; justify-content: space-between; }
-    .agent-stat-label { color: var(--text-muted); }
-    .agent-stat-value { color: var(--text-primary); font-weight: 500; }
+    .agent-bar-row .agent-bar-label { color: var(--text-muted); }
+    .agent-bar-row .agent-bar-value { color: var(--text-primary); font-weight: 600; font-variant-numeric: tabular-nums; }
+    .agent-bar-track {
+      height: 6px;
+      background: var(--bg-primary);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+    .agent-bar-fill {
+      height: 100%;
+      border-radius: 3px;
+      transition: width 0.5s ease;
+    }
+
+    .agent-stats-strip {
+      display: flex;
+      gap: 8px;
+      font-size: 0.72rem;
+      color: var(--text-secondary);
+      margin-top: 6px;
+    }
+    .agent-stats-strip .stat { display: flex; gap: 3px; align-items: center; }
+    .agent-stats-strip .stat .ico { color: var(--text-muted); }
+    .agent-stats-strip .stat b { color: var(--text-primary); font-weight: 600; font-variant-numeric: tabular-nums; }
+
+    /* Backwards-compat selectors for any older code paths still around. */
     .fitness-bar {
       grid-column: 1 / -1;
-      height: 4px;
+      height: 6px;
       background: var(--bg-primary);
-      border-radius: 2px;
+      border-radius: 3px;
       margin-top: 4px;
       overflow: hidden;
     }
-    .fitness-bar-fill {
-      height: 100%;
-      border-radius: 2px;
-      transition: width 0.5s ease;
-    }
+    .fitness-bar-fill { height: 100%; border-radius: 3px; transition: width 0.5s ease; }
     .trait-tags {
       display: flex;
       flex-wrap: wrap;
       gap: 3px;
-      margin-top: 6px;
+      margin-top: 8px;
     }
     .trait-tag {
       font-size: 0.65rem;
-      padding: 1px 5px;
-      border-radius: 3px;
+      padding: 1px 6px;
+      border-radius: 10px;
       background: var(--bg-primary);
       border: 1px solid var(--border);
       color: var(--text-secondary);
@@ -1143,44 +1197,44 @@ function renderAgentCard(agent) {
   const role = agent.genome?.personaName || 'unknown';
   const color = getRoleColor(role);
   const initial = (agent.genome?.personaName || agent.id).charAt(0).toUpperCase();
-  const fitnessPct = Math.min(agent.fitness * 10, 100);
   const rep = agent.reputation ?? 1.0;
   const traits = agent.genome?.traits || [];
+  const tokens = agent.tokenBalance ?? 0;
+  // Fitness range from the seed/runtime is roughly 0..100; clamp to fill a bar.
+  const fitV = Number(agent.fitness) || 0;
+  const fitnessPct = Math.max(0, Math.min(100, fitV));
+  const repPct = Math.max(0, Math.min(100, rep * 100));
+  const tokensFmt = tokens >= 10000 ? (tokens / 1000).toFixed(1) + 'k' : tokens.toLocaleString();
+  const genderSym = agent.gender === 'male' ? '♂' : agent.gender === 'female' ? '♀' : null;
+  const genderClass = agent.gender ? 'gender-' + agent.gender : '';
 
   return `
-    <div class="agent-card ${alive ? '' : 'dead'}">
+    <div class="agent-card ${alive ? '' : 'dead'}" style="border-left-color:${color}">
       <div class="agent-card-header">
-        <div class="agent-avatar" style="background:${color}">${initial}</div>
-        <span class="agent-name" title="${agent.id}">${agent.id}</span>
-        <span class="agent-role">${role}</span>
+        <div class="agent-avatar" style="background:${color}">${escapeHtml(initial)}</div>
+        <span class="agent-name" title="${escapeHtml(agent.id)}">${escapeHtml(agent.id)}</span>
+        <span class="agent-life-pill ${alive ? 'alive' : 'dead'}">${alive ? '● live' : '✕ dead'}</span>
       </div>
-      <div class="agent-stats">
-        <div class="agent-stat">
-          <span class="agent-stat-label">Fitness</span>
-          <span class="agent-stat-value">${agent.fitness.toFixed(1)}</span>
-        </div>
-        <div class="agent-stat">
-          <span class="agent-stat-label">Tokens</span>
-          <span class="agent-stat-value">${agent.tokenBalance ?? 0}</span>
-        </div>
-        <div class="agent-stat">
-          <span class="agent-stat-label">Age</span>
-          <span class="agent-stat-value">${agent.age ?? 0}</span>
-        </div>
-        <div class="agent-stat">
-          <span class="agent-stat-label">
-            Rep <span class="reputation-badge">
-              <span class="reputation-dot" style="background:${repColor(rep)}"></span>
-              ${(rep * 100).toFixed(0)}%
-            </span>
-          </span>
-          <span class="agent-stat-value">Gen ${agent.generation ?? 0}</span>
-        </div>
-        <div class="fitness-bar">
-          <div class="fitness-bar-fill" style="width:${fitnessPct}%;background:${color}"></div>
-        </div>
+      <div class="agent-meta">
+        <span class="agent-meta-role" style="color:${color}">${escapeHtml(role)}</span>
+        ${genderSym ? `<span class="${genderClass}">${genderSym}</span>` : ''}
+        <span>Gen ${agent.generation ?? 0}</span>
       </div>
-      ${traits.length > 0 ? `<div class="trait-tags">${traits.map(t => `<span class="trait-tag">${t}</span>`).join('')}</div>` : ''}
+      <div class="agent-bar-row">
+        <span class="agent-bar-label">Fitness</span>
+        <div class="agent-bar-track"><div class="agent-bar-fill" style="width:${fitnessPct}%;background:${color}"></div></div>
+        <span class="agent-bar-value">${fitV.toFixed(1)}</span>
+      </div>
+      <div class="agent-bar-row">
+        <span class="agent-bar-label">Rep</span>
+        <div class="agent-bar-track"><div class="agent-bar-fill" style="width:${repPct}%;background:${repColor(rep)}"></div></div>
+        <span class="agent-bar-value">${repPct.toFixed(0)}%</span>
+      </div>
+      <div class="agent-stats-strip">
+        <span class="stat" title="Tokens"><span class="ico">💰</span><b>${tokensFmt}</b></span>
+        <span class="stat" title="Age (cycles)"><span class="ico">🕒</span><b>${agent.age ?? 0}</b></span>
+      </div>
+      ${traits.length > 0 ? `<div class="trait-tags">${traits.map(t => `<span class="trait-tag">${escapeHtml(t)}</span>`).join('')}</div>` : ''}
     </div>
   `;
 }
