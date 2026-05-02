@@ -672,7 +672,26 @@
   </style>
 </head>
 <body>
-<script>if(!sessionStorage.getItem("tribe_token")){location.href="/login"}</script>
+<script>
+// ── TRIBE_CONFIG ─────────────────────────────────────────────────────────
+// Resolve the backend API URL. Priority:
+//   1. ?api=<url> query param (saved to localStorage so reloads remember it)
+//   2. localStorage.tribe_api_url
+//   3. http://localhost:3000  (the supervisor default; works for dev where
+//      `npm start` runs the API on 3000 and `npm run web` serves this page
+//      from a different port)
+(function(){
+  var qs = new URLSearchParams(location.search);
+  var qsApi = qs.get('api');
+  if (qsApi) localStorage.setItem('tribe_api_url', qsApi);
+  var apiUrl = (localStorage.getItem('tribe_api_url') || 'http://localhost:3000').replace(/\/$/, '');
+  window.TRIBE_CONFIG = {
+    apiUrl: apiUrl,
+    wsUrl: apiUrl.replace(/^http/, 'ws') + '/ws',
+  };
+})();
+if (!sessionStorage.getItem('tribe_token')) { location.href = 'login.html'; }
+</script>
 
 <!-- Header -->
 <header>
@@ -1148,7 +1167,7 @@ function updateDashboard(data) {
 // ── Event Detail Modal ──
 async function openEventDetail(eventIndex) {
   try {
-    const res = await fetch(`/api/events/${eventIndex}`);
+    const res = await authFetch(`/api/events/${eventIndex}`);
     if (!res.ok) {
       document.getElementById('modal-body').innerHTML = '<p style="color:var(--red)">Failed to load event</p>';
       document.getElementById('event-modal').classList.add('active');
@@ -1229,7 +1248,7 @@ let allEvents = [];
 async function applyEventFilter() {
   const filter = document.getElementById('event-type-filter').value;
   try {
-    const res = await fetch(`/api/events?limit=100&offset=0&type=${filter}`);
+    const res = await authFetch(`/api/events?limit=100&offset=0&type=${filter}`);
     const events = await res.json();
     renderEvents(events);
   } catch (err) {
@@ -1513,7 +1532,24 @@ async function loadTree() {
 
 // ── Auth Helpers ──
 function authHeaders() { var t = sessionStorage.getItem('tribe_token'); return t ? { 'X-Auth-Token': t } : {}; }
-function authFetch(url, opts) { opts = opts || {}; opts.headers = Object.assign(opts.headers || {}, authHeaders()); return fetch(url, opts); }
+// Prepend the configured API base URL to any path that doesn't already
+// have a scheme. On 401, drop the (now-invalid) token and bounce back to
+// the login page.
+function apiUrl(path) {
+  if (/^[a-z]+:\/\//i.test(path)) return path;
+  return (window.TRIBE_CONFIG && window.TRIBE_CONFIG.apiUrl ? window.TRIBE_CONFIG.apiUrl : '') + path;
+}
+function authFetch(url, opts) {
+  opts = opts || {};
+  opts.headers = Object.assign(opts.headers || {}, authHeaders());
+  return fetch(apiUrl(url), opts).then(function(r){
+    if (r.status === 401) {
+      sessionStorage.removeItem('tribe_token');
+      location.href = 'login.html';
+    }
+    return r;
+  });
+}
 
 // ── Initial Load via REST ──
 async function loadInitialData() {
@@ -1565,8 +1601,8 @@ function connectWS() {
   statusConnecting();
   startPolling(); // Start REST polling as backup
 
-  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const wsUrl = `${protocol}//${location.host}/ws`;
+  const wsUrl = (window.TRIBE_CONFIG && window.TRIBE_CONFIG.wsUrl)
+    || (location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + location.host + '/ws';
   let ws;
   try {
     ws = new WebSocket(wsUrl) /* WebSocket auth via protocol token */;
@@ -1699,7 +1735,7 @@ async function loadBounties() {
 
 async function openBountyDetail(bountyId) {
   try {
-    const res = await fetch(`/api/bounties/${bountyId}`);
+    const res = await authFetch(`/api/bounties/${bountyId}`);
     if (!res.ok) return;
     const bounty = await res.json();
 
