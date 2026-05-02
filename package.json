@@ -8,6 +8,7 @@
     "start": "tsx src/main.ts",
     "dev": "tsx watch src/main.ts",
     "web": "tsx src/web-server.ts",
+    "cleanup:zombies": "tsx src/scripts/cleanup-zombies.ts",
     "test": "vitest run",
     "test:watch": "vitest"
   },
