@@ -122,6 +122,7 @@ async function decideForAgent(
   cycleNum: number,
   aliveCount: number,
   proposalManager: ProposalManager,
+  bountyBoard: BountyBoard,
   notifyConfig: NotifyConfig,
   saveAgent: (a: AgentState) => Promise<void>,
 ): Promise<void> {
@@ -321,7 +322,7 @@ export class Supervisor extends EventEmitter {
     // LLM-powered decisions for each agent (parallel)
     const results = await Promise.allSettled(
       alive.map(agent =>
-        decideForAgent(agent, cycleNum, alive.length, this.proposalManager, this.getNotifyConfig(), this.saveAgent.bind(this))
+        decideForAgent(agent, cycleNum, alive.length, this.proposalManager, this.bountyBoard, this.getNotifyConfig(), this.saveAgent.bind(this))
       )
     );
 
