@@ -1012,54 +1012,101 @@ function fitnessColor(f) {
 async function loadTree() {
   const container = document.getElementById('tree-container');
   if (!container) return;
-  
+
   try {
     const res = await fetch('/api/tree');
-    if (!res.ok) { container.innerHTML = '<div class="empty-state"><em>' + String.fromCodePoint(0x1F333) + '</em>No tree data</div>'; return; }
+    if (!res.ok) { container.innerHTML = '<div class="empty-state"><em>🌳</em>No tree data</div>'; return; }
     const { nodes } = await res.json();
-    if (!nodes || nodes.length === 0) { container.innerHTML = '<div class="empty-state"><em>' + String.fromCodePoint(0x1F333) + '</em>No agents yet</div>'; return; }
+    if (!nodes || nodes.length === 0) { container.innerHTML = '<div class="empty-state"><em>🌳</em>No agents yet</div>'; return; }
 
-    const children = {};
+    const childrenMap = {};
+    const byId = {};
     let roots = [];
     for (const n of nodes) {
+      byId[n.id] = n;
       if (n.parentId === null || !nodes.some(x => x.id === n.parentId)) {
         roots.push(n);
       } else {
-        if (!children[n.parentId]) children[n.parentId] = [];
-        children[n.parentId].push(n);
+        if (!childrenMap[n.parentId]) childrenMap[n.parentId] = [];
+        childrenMap[n.parentId].push(n);
       }
     }
 
-    function renderNode(node, d) {
-      var c = node.personaName;
-      var color = (ROLE_COLORS_MAP && ROLE_COLORS_MAP[c]) || '#8b949e';
+    function shortId(id) { return (id || '').replace('agent_','').slice(0,8); }
+
+    function renderNode(node, depth) {
+      var role = node.personaName || 'Unknown';
+      var color = (typeof ROLE_COLORS_MAP !== 'undefined' && ROLE_COLORS_MAP[role]) || '#8b949e';
       var alive = node.alive !== false;
       var fc = node.fitness > 70 ? '#39d353' : node.fitness > 40 ? '#d29922' : '#f85149';
-      var op = alive ? 1 : 0.4;
-      
-      var div = document.createElement('div');
-      div.className = 'tree-node-card';
-      div.style.cssText = 'display:inline-block;margin:6px 4px;padding:8px 12px;border-radius:8px;background:' + color + '33;border:1.5px solid ' + color + ';opacity:' + op + ';cursor:pointer;min-width:100px;text-align:center;vertical-align:top;font-size:12px';
-      div.innerHTML = '<div style="font-weight:600;color:' + color + '">' + c + '</div><div style="font-size:10px;color:#8b949e">' + node.id.replace('agent_','').slice(0,8) + '</div><div style="font-size:11px;color:' + fc + ';font-weight:600">fit:' + (node.fitness ? node.fitness.toFixed(1) : '0') + '</div><div style="font-size:9px;color:#6e7681">G' + (node.generation || 0) + '</div>';
-      
-      var kids = children[node.id] || [];
+      var fitness = node.fitness || 0;
+      var gen = node.generation || 0;
+      var parentLabel = node.parentId ? shortId(node.parentId) : 'root';
+      var op = alive ? 1 : 0.5;
+
+      var wrapper = document.createElement('div');
+      wrapper.style.cssText = 'margin-left:4px;margin-top:4px;';
+
+      var card = document.createElement('div');
+      card.style.cssText = [
+        'display:inline-block',
+        'min-width:150px',
+        'padding:8px 12px',
+        'border-radius:8px',
+        'background:' + color + '18',
+        'border:1.5px solid ' + color + '44',
+        'opacity:' + op,
+        'cursor:pointer',
+        'transition:transform 0.15s',
+      ].join(';');
+      card.onmouseenter = function() { card.style.transform = 'translateY(-2px)'; };
+      card.onmouseleave = function() { card.style.transform = 'translateY(0)'; };
+
+      var aliveBadge = alive
+        ? '<span style="font-size:10px;color:#39d353">● live</span>'
+        : '<span style="font-size:10px;color:#f85149">● dead</span>';
+
+      card.innerHTML =
+        '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:4px">' +
+          '<span style="font-weight:700;color:' + color + ';font-size:13px">' + role + '</span>' +
+          '<span style="font-size:10px;padding:1px 6px;border-radius:3px;background:#0d1117;color:#8b949e">Gen ' + gen + '</span>' +
+        '</div>' +
+        '<div style="font-family:monospace;font-size:10px;color:#e6edf3;margin-bottom:3px">' +
+          '<span style="color:#6e7681">id:</span> ' + shortId(node.id) +
+        '</div>' +
+        '<div style="font-family:monospace;font-size:10px;color:#8b949e;margin-bottom:3px">' +
+          '<span style="color:#6e7681">parent:</span> ' + parentLabel +
+        '</div>' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;font-size:11px">' +
+          '<span style="color:' + fc + ';font-weight:600">fit ' + fitness.toFixed(1) + '</span>' +
+          aliveBadge +
+        '</div>';
+
+      wrapper.appendChild(card);
+
+      var kids = childrenMap[node.id] || [];
       if (kids.length > 0) {
-        var kd = document.createElement('div');
-        kd.style.cssText = 'margin-left:16px;border-left:1px solid #21262d;padding-left:8px;';
-        kids.forEach(function(k) { kd.appendChild(renderNode(k, d+1)); });
-        div.appendChild(kd);
+        var kidsBox = document.createElement('div');
+        kidsBox.style.cssText = 'margin-left:24px;padding-left:16px;border-left:2px solid ' + color + '55;margin-top:4px;position:relative;';
+        kids.forEach(function(k) { kidsBox.appendChild(renderNode(k, depth + 1)); });
+        wrapper.appendChild(kidsBox);
       }
-      return div;
+
+      return wrapper;
     }
 
     container.innerHTML = '';
-    var wrap = document.createElement('div');
-    wrap.style.cssText = 'padding:12px;overflow-x:auto;';
-    roots.forEach(function(r) { wrap.appendChild(renderNode(r, 0)); });
-    container.appendChild(wrap);
+    var scroller = document.createElement('div');
+    scroller.style.cssText = 'padding:16px;overflow:auto;height:100%;width:100%;';
+    roots.forEach(function(r) { scroller.appendChild(renderNode(r, 0)); });
+    container.appendChild(scroller);
 
   } catch (err) {
     console.error('Tree failed:', err);
+  }
+}
+
+e failed:', err);
   }
 }
 

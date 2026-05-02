@@ -317,7 +317,13 @@ export function runCycle(agents: AgentState[], cycleNumber: number, maxAgents: n
   const eliminatedCount = Math.min(eliminated.length, slots);
 
   // Step 3: Reproduce (sexual reproduction with gender pairing)
-  const offspring = reproduce(ranked, eliminatedCount);
+  const offspring =
+    eliminatedCount > 0
+      ? reproduce(
+          ranked.filter(r => survivors.some(s => s.id === r.agent.id)),
+          eliminatedCount,
+        )
+      : [];
 
   // Step 4: Update ages and protections for survivors
   const updatedSurvivors = survivors.map((agent) => ({
