@@ -220,67 +220,121 @@
     .agent-card {
       background: var(--bg-secondary);
       border: 1px solid var(--border);
+      border-left: 3px solid transparent;  /* role color on render */
       border-radius: 6px;
-      padding: 10px;
-      transition: border-color 0.2s, background 0.2s;
+      padding: 10px 12px;
+      transition: border-color 0.2s, background 0.2s, transform 0.15s;
       cursor: default;
     }
-    .agent-card:hover { border-color: var(--accent-dim); background: var(--bg-hover); }
-    .agent-card.dead { opacity: 0.5; }
+    .agent-card:hover { border-color: var(--accent-dim); background: var(--bg-hover); transform: translateY(-1px); }
+    .agent-card.dead {
+      opacity: 0.6;
+      filter: grayscale(0.4);
+    }
+    .agent-card.dead .agent-name { text-decoration: line-through; text-decoration-color: var(--red); }
+
     .agent-card-header {
       display: flex;
       align-items: center;
       gap: 8px;
-      margin-bottom: 6px;
+      margin-bottom: 4px;
     }
     .agent-avatar {
-      width: 28px; height: 28px; border-radius: 50%;
+      width: 32px; height: 32px; border-radius: 50%;
       display: flex; align-items: center; justify-content: center;
-      font-size: 0.75rem; font-weight: 700; color: #fff;
+      font-size: 0.85rem; font-weight: 700; color: #fff;
       flex-shrink: 0;
+      box-shadow: 0 0 0 2px rgba(255,255,255,0.04);
     }
     .agent-name {
       font-weight: 600;
       font-size: 0.85rem;
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      flex: 1;
+      min-width: 0;
     }
-    .agent-role {
+    .agent-life-pill {
+      font-size: 0.65rem;
+      padding: 2px 6px;
+      border-radius: 10px;
+      font-weight: 600;
+      flex-shrink: 0;
+      border: 1px solid;
+    }
+    .agent-life-pill.alive { color: var(--accent); border-color: var(--accent-dim); background: rgba(35,134,54,0.12); }
+    .agent-life-pill.dead { color: var(--red); border-color: rgba(248,81,73,0.4); background: rgba(248,81,73,0.10); }
+
+    .agent-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      margin-bottom: 8px;
       font-size: 0.7rem;
       color: var(--text-muted);
-      margin-left: auto;
     }
-    .agent-stats {
+    .agent-meta span {
+      padding: 1px 6px;
+      border-radius: 3px;
+      background: var(--bg-primary);
+      border: 1px solid var(--border);
+    }
+    .agent-meta .agent-meta-role { color: var(--text-secondary); font-weight: 600; }
+    .agent-meta .gender-male { color: #58a6ff; }
+    .agent-meta .gender-female { color: #ff7eb6; }
+
+    .agent-bar-row {
       display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 2px 8px;
-      font-size: 0.78rem;
+      grid-template-columns: 50px 1fr auto;
+      gap: 6px;
+      align-items: center;
+      font-size: 0.72rem;
+      margin-bottom: 4px;
     }
-    .agent-stat { display: flex; justify-content: space-between; }
-    .agent-stat-label { color: var(--text-muted); }
-    .agent-stat-value { color: var(--text-primary); font-weight: 500; }
+    .agent-bar-row .agent-bar-label { color: var(--text-muted); }
+    .agent-bar-row .agent-bar-value { color: var(--text-primary); font-weight: 600; font-variant-numeric: tabular-nums; }
+    .agent-bar-track {
+      height: 6px;
+      background: var(--bg-primary);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+    .agent-bar-fill {
+      height: 100%;
+      border-radius: 3px;
+      transition: width 0.5s ease;
+    }
+
+    .agent-stats-strip {
+      display: flex;
+      gap: 8px;
+      font-size: 0.72rem;
+      color: var(--text-secondary);
+      margin-top: 6px;
+    }
+    .agent-stats-strip .stat { display: flex; gap: 3px; align-items: center; }
+    .agent-stats-strip .stat .ico { color: var(--text-muted); }
+    .agent-stats-strip .stat b { color: var(--text-primary); font-weight: 600; font-variant-numeric: tabular-nums; }
+
+    /* Backwards-compat selectors for any older code paths still around. */
     .fitness-bar {
       grid-column: 1 / -1;
-      height: 4px;
+      height: 6px;
       background: var(--bg-primary);
-      border-radius: 2px;
+      border-radius: 3px;
       margin-top: 4px;
       overflow: hidden;
     }
-    .fitness-bar-fill {
-      height: 100%;
-      border-radius: 2px;
-      transition: width 0.5s ease;
-    }
+    .fitness-bar-fill { height: 100%; border-radius: 3px; transition: width 0.5s ease; }
     .trait-tags {
       display: flex;
       flex-wrap: wrap;
       gap: 3px;
-      margin-top: 6px;
+      margin-top: 8px;
     }
     .trait-tag {
       font-size: 0.65rem;
-      padding: 1px 5px;
-      border-radius: 3px;
+      padding: 1px 6px;
+      border-radius: 10px;
       background: var(--bg-primary);
       border: 1px solid var(--border);
       color: var(--text-secondary);
@@ -513,10 +567,25 @@
     .bounty-card-title {
       font-weight: 600;
       font-size: 0.9rem;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
       flex: 1;
+      /* Allow up to 2 lines, with ellipsis on overflow. */
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+      line-height: 1.3;
+      word-break: break-word;
+    }
+    .bounty-card-desc {
+      font-size: 0.78rem;
+      color: var(--text-secondary);
+      margin: 4px 0 8px 0;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+      line-height: 1.4;
+      word-break: break-word;
     }
     .bounty-card-reward {
       font-size: 0.82rem;
@@ -618,6 +687,109 @@
     }
     .bounty-btn-secondary:hover {
       color: var(--text-primary);
+    }
+
+    /* ── Verification Rule Builder (in create form) ── */
+    .verif-rule {
+      background: var(--bg-primary);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 8px;
+      margin-bottom: 6px;
+    }
+    .verif-rule-head {
+      display: flex; gap: 6px; align-items: center; margin-bottom: 6px;
+    }
+    .verif-rule-head select {
+      flex: 0 0 130px;
+    }
+    .verif-rule-head input.verif-rule-desc { flex: 1; }
+    .verif-rule-remove {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--red);
+      width: 28px; height: 28px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 14px;
+      flex-shrink: 0;
+    }
+    .verif-rule-remove:hover { background: #2a1115; }
+    .verif-rule-fields {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+    }
+    .verif-rule-fields .form-input {
+      font-size: 0.78rem;
+      padding: 6px 8px;
+    }
+    .verif-add-btn {
+      background: transparent;
+      border: 1px dashed var(--border);
+      color: var(--text-secondary);
+      padding: 6px 10px;
+      border-radius: 6px;
+      font-size: 0.78rem;
+      cursor: pointer;
+      width: 100%;
+    }
+    .verif-add-btn:hover {
+      border-color: var(--accent-dim);
+      color: var(--accent);
+    }
+
+    /* ── Verification Rule (in detail modal) ── */
+    .verif-list {
+      display: flex; flex-direction: column; gap: 6px;
+      margin-top: 4px;
+    }
+    .verif-list-empty {
+      color: var(--text-muted);
+      font-size: 0.82rem;
+      font-style: italic;
+    }
+    .verif-item {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-left: 3px solid var(--accent-dim);
+      border-radius: 6px;
+      padding: 8px 10px;
+      font-size: 0.82rem;
+    }
+    .verif-item-head {
+      display: flex; align-items: center; gap: 6px;
+      margin-bottom: 4px;
+    }
+    .verif-item-icon { font-size: 14px; }
+    .verif-item-type {
+      font-size: 0.7rem;
+      padding: 1px 6px;
+      border-radius: 3px;
+      background: var(--bg-primary);
+      color: var(--text-secondary);
+      border: 1px solid var(--border);
+      font-family: ui-monospace, monospace;
+    }
+    .verif-item-desc {
+      color: var(--text-primary);
+      flex: 1;
+    }
+    .verif-item-detail {
+      color: var(--text-muted);
+      font-family: ui-monospace, monospace;
+      font-size: 0.75rem;
+      word-break: break-all;
+    }
+    .verif-item-detail b { color: var(--text-secondary); font-weight: 500; }
+
+    /* Verification count chip on bounty card */
+    .bounty-card-verif {
+      font-size: 0.7rem;
+      padding: 1px 6px;
+      border-radius: 3px;
+      background: var(--accent-dim);
+      color: var(--accent);
     }
 
     /* ── Bounty Detail in Modal ── */
@@ -897,8 +1069,11 @@ if (!sessionStorage.getItem('tribe_token')) { location.href = 'login.html'; }
           </div>
         </div>
         <div class="form-group">
-          <label class="form-label">验证脚本</label>
-          <input id="bounty-form-tests" class="form-input" type="text" placeholder="test_xxx" />
+          <label class="form-label">验证规则 / Verification rules
+            <span style="color:var(--text-muted);font-size:0.7rem;font-weight:400">— 可添加多条，所有规则都通过才算完成</span>
+          </label>
+          <div id="bounty-form-rules"></div>
+          <button type="button" class="verif-add-btn" onclick="addVerifRule()">＋ 添加规则</button>
         </div>
         <div class="form-group">
           <label class="form-label">截止时间</label>
@@ -1022,44 +1197,44 @@ function renderAgentCard(agent) {
   const role = agent.genome?.personaName || 'unknown';
   const color = getRoleColor(role);
   const initial = (agent.genome?.personaName || agent.id).charAt(0).toUpperCase();
-  const fitnessPct = Math.min(agent.fitness * 10, 100);
   const rep = agent.reputation ?? 1.0;
   const traits = agent.genome?.traits || [];
+  const tokens = agent.tokenBalance ?? 0;
+  // Fitness range from the seed/runtime is roughly 0..100; clamp to fill a bar.
+  const fitV = Number(agent.fitness) || 0;
+  const fitnessPct = Math.max(0, Math.min(100, fitV));
+  const repPct = Math.max(0, Math.min(100, rep * 100));
+  const tokensFmt = tokens >= 10000 ? (tokens / 1000).toFixed(1) + 'k' : tokens.toLocaleString();
+  const genderSym = agent.gender === 'male' ? '♂' : agent.gender === 'female' ? '♀' : null;
+  const genderClass = agent.gender ? 'gender-' + agent.gender : '';
 
   return `
-    <div class="agent-card ${alive ? '' : 'dead'}">
+    <div class="agent-card ${alive ? '' : 'dead'}" style="border-left-color:${color}">
       <div class="agent-card-header">
-        <div class="agent-avatar" style="background:${color}">${initial}</div>
-        <span class="agent-name" title="${agent.id}">${agent.id}</span>
-        <span class="agent-role">${role}</span>
+        <div class="agent-avatar" style="background:${color}">${escapeHtml(initial)}</div>
+        <span class="agent-name" title="${escapeHtml(agent.id)}">${escapeHtml(agent.id)}</span>
+        <span class="agent-life-pill ${alive ? 'alive' : 'dead'}">${alive ? '● live' : '✕ dead'}</span>
       </div>
-      <div class="agent-stats">
-        <div class="agent-stat">
-          <span class="agent-stat-label">Fitness</span>
-          <span class="agent-stat-value">${agent.fitness.toFixed(1)}</span>
-        </div>
-        <div class="agent-stat">
-          <span class="agent-stat-label">Tokens</span>
-          <span class="agent-stat-value">${agent.tokenBalance ?? 0}</span>
-        </div>
-        <div class="agent-stat">
-          <span class="agent-stat-label">Age</span>
-          <span class="agent-stat-value">${agent.age ?? 0}</span>
-        </div>
-        <div class="agent-stat">
-          <span class="agent-stat-label">
-            Rep <span class="reputation-badge">
-              <span class="reputation-dot" style="background:${repColor(rep)}"></span>
-              ${(rep * 100).toFixed(0)}%
-            </span>
-          </span>
-          <span class="agent-stat-value">Gen ${agent.generation ?? 0}</span>
-        </div>
-        <div class="fitness-bar">
-          <div class="fitness-bar-fill" style="width:${fitnessPct}%;background:${color}"></div>
-        </div>
+      <div class="agent-meta">
+        <span class="agent-meta-role" style="color:${color}">${escapeHtml(role)}</span>
+        ${genderSym ? `<span class="${genderClass}">${genderSym}</span>` : ''}
+        <span>Gen ${agent.generation ?? 0}</span>
       </div>
-      ${traits.length > 0 ? `<div class="trait-tags">${traits.map(t => `<span class="trait-tag">${t}</span>`).join('')}</div>` : ''}
+      <div class="agent-bar-row">
+        <span class="agent-bar-label">Fitness</span>
+        <div class="agent-bar-track"><div class="agent-bar-fill" style="width:${fitnessPct}%;background:${color}"></div></div>
+        <span class="agent-bar-value">${fitV.toFixed(1)}</span>
+      </div>
+      <div class="agent-bar-row">
+        <span class="agent-bar-label">Rep</span>
+        <div class="agent-bar-track"><div class="agent-bar-fill" style="width:${repPct}%;background:${repColor(rep)}"></div></div>
+        <span class="agent-bar-value">${repPct.toFixed(0)}%</span>
+      </div>
+      <div class="agent-stats-strip">
+        <span class="stat" title="Tokens"><span class="ico">💰</span><b>${tokensFmt}</b></span>
+        <span class="stat" title="Age (cycles)"><span class="ico">🕒</span><b>${agent.age ?? 0}</b></span>
+      </div>
+      ${traits.length > 0 ? `<div class="trait-tags">${traits.map(t => `<span class="trait-tag">${escapeHtml(t)}</span>`).join('')}</div>` : ''}
     </div>
   `;
 }
@@ -1557,11 +1732,15 @@ async function loadTree() {
       });
     }
 
-    // Draw edges (Bezier)
+    // Draw edges (Bezier). Color the primary lineage edge in the child's
+    // role color so each branch is visually distinct against the dark
+    // background. Co-parent edges stay subtle and dashed so the eye knows
+    // which lineage is the "main" one.
     for (let d = 1; d <= maxDepth; d++) {
       for (const n of (byDepth[d] || [])) {
         const pos = positions[n.id];
         if (!pos) continue;
+        const childColor = ROLE_COLORS_MAP[n.personaName] || '#8b949e';
         const pids = (n.parentIds && n.parentIds.length) ? n.parentIds : (n.parentId ? [n.parentId] : []);
         let first = true;
         for (const pid of pids) {
@@ -1570,9 +1749,11 @@ async function loadTree() {
           const p = document.createElementNS(SVG_NS, 'path');
           const midY = (pp.y + NODE_H + pos.y) / 2;
           p.setAttribute('d', 'M' + (pp.x + NODE_W/2) + ',' + (pp.y + NODE_H) + ' C' + (pp.x + NODE_W/2) + ',' + midY + ' ' + (pos.x + NODE_W/2) + ',' + midY + ' ' + (pos.x + NODE_W/2) + ',' + pos.y);
-          p.setAttribute('stroke', first ? '#30363d' : '#8b949e');
-          p.setAttribute('stroke-width', first ? '1.5' : '1');
-          if (!first) p.setAttribute('stroke-dasharray', '3,3');
+          p.setAttribute('stroke', first ? childColor : '#8b949e');
+          p.setAttribute('stroke-width', first ? '2' : '1.2');
+          p.setAttribute('stroke-opacity', first ? '0.75' : '0.55');
+          p.setAttribute('stroke-linecap', 'round');
+          if (!first) p.setAttribute('stroke-dasharray', '4,4');
           p.setAttribute('fill', 'none');
           svg.appendChild(p);
           first = false;
@@ -1802,6 +1983,9 @@ function renderBounties() {
     const deadlineStr = formatTimeRemaining(bounty.deadline);
     const bidCount = (bounty.bids || []).length;
     const statusIcon = getStatusIcon(bounty.status);
+    const verifCount = Array.isArray(bounty.verificationTests) ? bounty.verificationTests.length : 0;
+
+    const desc = bounty.description ? `<div class="bounty-card-desc">${escapeHtml(bounty.description)}</div>` : '';
 
     return `
       <div class="bounty-card status-${bounty.status}" onclick="openBountyDetail('${bounty.id}')">
@@ -1809,10 +1993,12 @@ function renderBounties() {
           <span class="bounty-card-title">${icon} ${escapeHtml(bounty.title)}</span>
           <span class="bounty-card-reward">💰${bounty.reward}</span>
         </div>
+        ${desc}
         <div class="bounty-card-meta">
           <span class="bounty-card-type">${escapeHtml(bounty.type)}</span>
           <span>⏱ ${deadlineStr}</span>
           <span>${bidCount > 0 ? `${bidCount} bids` : '0 bid'}</span>
+          ${verifCount > 0 ? `<span class="bounty-card-verif" title="${verifCount} verification rule${verifCount===1?'':'s'}">✓ ${verifCount}</span>` : ''}
           <span class="bounty-card-status-label ${bounty.status}">${statusIcon} ${bounty.status}</span>
         </div>
       </div>
@@ -1822,7 +2008,52 @@ function renderBounties() {
 
 function escapeHtml(str) {
   if (!str) return '';
-  return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// Render a bounty's verificationTests array as a structured rule list.
+// Tolerates legacy bounties where the field is a plain string or missing.
+function renderVerifList(tests) {
+  if (!tests || (Array.isArray(tests) && tests.length === 0)) {
+    return '<span class="verif-list-empty">无验证规则 / no rules</span>';
+  }
+  if (typeof tests === 'string') {
+    // Legacy: a single string, render as a free-form rule.
+    return '<div class="verif-list"><div class="verif-item"><div class="verif-item-head"><span class="verif-item-icon">📜</span><span class="verif-item-type">legacy</span></div><div class="verif-item-detail">' + escapeHtml(tests) + '</div></div></div>';
+  }
+  if (!Array.isArray(tests)) return '<span class="verif-list-empty">—</span>';
+
+  const ICONS = { shell_test: '🔧', file_check: '📄', api_check: '🌐', llm_review: '🤖' };
+  const items = tests.map(t => {
+    const type = t && t.type ? String(t.type) : 'unknown';
+    const icon = ICONS[type] || '🔍';
+    const desc = t && t.description ? escapeHtml(t.description) : '';
+    let detail = '';
+    if (type === 'shell_test' && t.command) {
+      detail = '<b>$</b> ' + escapeHtml(t.command);
+    } else if (type === 'file_check') {
+      const parts = [];
+      if (t.filePath) parts.push('<b>file:</b> ' + escapeHtml(t.filePath));
+      if (t.expectedContent !== undefined) parts.push('<b>expects:</b> ' + escapeHtml(t.expectedContent));
+      detail = parts.join(' &nbsp;·&nbsp; ');
+    } else if (type === 'api_check') {
+      const parts = [];
+      if (t.url) parts.push('<b>GET</b> ' + escapeHtml(t.url));
+      if (t.expectedStatus !== undefined) parts.push('<b>status:</b> ' + escapeHtml(t.expectedStatus));
+      detail = parts.join(' &nbsp;·&nbsp; ');
+    } else if (type === 'llm_review' && t.prompt) {
+      detail = '<b>prompt:</b> ' + escapeHtml(t.prompt);
+    }
+    return '<div class="verif-item">' +
+      '<div class="verif-item-head">' +
+        '<span class="verif-item-icon">' + icon + '</span>' +
+        '<span class="verif-item-type">' + escapeHtml(type) + '</span>' +
+        '<span class="verif-item-desc">' + desc + '</span>' +
+      '</div>' +
+      (detail ? '<div class="verif-item-detail">' + detail + '</div>' : '') +
+    '</div>';
+  }).join('');
+  return '<div class="verif-list">' + items + '</div>';
 }
 
 // ── Load Bounties ──
@@ -1894,9 +2125,9 @@ async function openBountyDetail(bountyId) {
         <span class="modal-detail-label">截止</span>
         <span class="modal-detail-value">${new Date(bounty.deadline).toLocaleString()} (${deadlineStr})</span>
       </div>
-      <div class="modal-detail-row">
+      <div class="modal-detail-row" style="align-items:flex-start">
         <span class="modal-detail-label">验证</span>
-        <span class="modal-detail-value" style="font-family:monospace;font-size:0.78rem">${escapeHtml(bounty.verificationTests || '—')}</span>
+        <span class="modal-detail-value">${renderVerifList(bounty.verificationTests)}</span>
       </div>
       <div class="modal-detail-row">
         <span class="modal-detail-label">创建者</span>
@@ -1932,8 +2163,76 @@ function openCreateBountyModal() {
   document.getElementById('bounty-form-desc').value = '';
   document.getElementById('bounty-form-type').value = 'bug';
   document.getElementById('bounty-form-reward').value = '';
-  document.getElementById('bounty-form-tests').value = '';
+  document.getElementById('bounty-form-rules').innerHTML = '';
   document.getElementById('create-bounty-modal').classList.add('active');
+}
+
+// ── Verification rule builder ──
+// Each rule maps to the VerificationTest shape on the backend:
+//   { type, description, command? | filePath?+expectedContent? | url?+expectedStatus? | prompt? }
+const VERIF_TYPES = [
+  { value: 'shell_test', icon: '🔧', label: 'shell_test',
+    fields: [{ key: 'command', placeholder: 'e.g. test -f /tmp/done', span: 2 }] },
+  { value: 'file_check', icon: '📄', label: 'file_check',
+    fields: [
+      { key: 'filePath', placeholder: '/path/to/file', span: 1 },
+      { key: 'expectedContent', placeholder: 'expected content (optional)', span: 1 },
+    ] },
+  { value: 'api_check', icon: '🌐', label: 'api_check',
+    fields: [
+      { key: 'url', placeholder: 'https://example.com/health', span: 1 },
+      { key: 'expectedStatus', placeholder: '200', span: 1, type: 'number' },
+    ] },
+  { value: 'llm_review', icon: '🤖', label: 'llm_review',
+    fields: [{ key: 'prompt', placeholder: 'Prompt for the reviewer', span: 2 }] },
+];
+
+function addVerifRule() {
+  const host = document.getElementById('bounty-form-rules');
+  const row = document.createElement('div');
+  row.className = 'verif-rule';
+  row.innerHTML =
+    '<div class="verif-rule-head">' +
+      '<select class="form-input verif-rule-type">' +
+        VERIF_TYPES.map(t => '<option value="' + t.value + '">' + t.icon + ' ' + t.label + '</option>').join('') +
+      '</select>' +
+      '<input class="form-input verif-rule-desc" type="text" placeholder="规则描述 / description" />' +
+      '<button type="button" class="verif-rule-remove" title="移除">✕</button>' +
+    '</div>' +
+    '<div class="verif-rule-fields"></div>';
+  host.appendChild(row);
+
+  const sel = row.querySelector('.verif-rule-type');
+  const fieldsEl = row.querySelector('.verif-rule-fields');
+  function renderFields() {
+    const t = VERIF_TYPES.find(x => x.value === sel.value);
+    fieldsEl.innerHTML = (t.fields || []).map(f =>
+      '<input class="form-input verif-rule-field" data-key="' + f.key + '" ' +
+      'type="' + (f.type || 'text') + '" ' +
+      'placeholder="' + f.placeholder + '" ' +
+      'style="grid-column: span ' + (f.span || 1) + '" />'
+    ).join('');
+  }
+  renderFields();
+  sel.addEventListener('change', renderFields);
+  row.querySelector('.verif-rule-remove').onclick = () => row.remove();
+}
+
+function collectVerifRules() {
+  const rules = [];
+  document.querySelectorAll('#bounty-form-rules .verif-rule').forEach(row => {
+    const type = row.querySelector('.verif-rule-type').value;
+    const description = row.querySelector('.verif-rule-desc').value.trim() || type;
+    const test = { type, description };
+    row.querySelectorAll('.verif-rule-field').forEach(input => {
+      const v = input.value.trim();
+      if (!v) return;
+      const k = input.dataset.key;
+      test[k] = (input.type === 'number') ? Number(v) : v;
+    });
+    rules.push(test);
+  });
+  return rules;
 }
 
 function closeCreateBountyModal() {
@@ -1969,7 +2268,7 @@ async function submitBounty() {
     description: document.getElementById('bounty-form-desc').value.trim(),
     type: document.getElementById('bounty-form-type').value,
     reward,
-    verificationTests: document.getElementById('bounty-form-tests').value.trim(),
+    verificationTests: collectVerifRules(),
     deadline,
   };
 

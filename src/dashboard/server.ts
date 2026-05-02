@@ -24,6 +24,9 @@ interface AgentSummary {
   age: number;
   generation: number;
   alive: boolean;
+  /** Sourced from diploidGenome.gender. Optional for agents persisted
+   *  before the diploid genome landed. */
+  gender?: 'male' | 'female';
 }
 
 interface StatsResponse {
@@ -138,6 +141,7 @@ const agentsDir = path.join(ecosystemDir, 'agents');
             age: state.age,
             generation: state.generation,
             alive: state.alive,
+            gender: state.diploidGenome?.gender,
           });
         } catch {
           // skip corrupted files
