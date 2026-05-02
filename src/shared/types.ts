@@ -19,6 +19,10 @@ export interface AgentState {
   genome: Genome;
   generation: number;
   parentId: string | null;
+  /** Both parents for sexual reproduction (mother + father). Optional for
+   *  backwards-compatibility with on-disk agent files written before this
+   *  field existed; lineage rendering should fall back to `parentId`. */
+  parentIds?: string[];
   tokenBalance: number;
   contributionScore: number;
   reputation: number;  // 0.0 ~ 1.0 (守信率)

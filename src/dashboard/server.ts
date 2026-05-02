@@ -58,6 +58,11 @@ interface TreeAgentNode {
   personaName: string;
   generation: number;
   parentId: string | null;
+  /** Full parent set for sexual reproduction. Optional; if absent, fall back
+   *  to `parentId`. The first entry is the primary lineage parent (used to
+   *  position the node in the tree); additional entries are co-parents and
+   *  rendered as dashed edges. */
+  parentIds?: string[];
   alive: boolean;
   fitness: number;
 }
@@ -208,6 +213,7 @@ const agentsDir = path.join(ecosystemDir, 'agents');
             personaName: state.genome.personaName,
             generation: state.generation,
             parentId: state.parentId,
+            parentIds: state.parentIds,
             alive: state.alive,
             fitness: state.fitness,
           });

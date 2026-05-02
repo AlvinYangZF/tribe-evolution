@@ -373,19 +373,13 @@
       min-height: 450px;
       height: 60vh;
       position: relative;
-      overflow: hidden;
+      overflow: auto;            /* scroll wide / tall trees */
       border-radius: 6px;
       background: #0a0e14;
     }
     #tree-svg {
       display: block;
-      width: 100%;
-      height: 100%;
-      min-height: 450px;
-      cursor: grab;
-    }
-    #tree-svg:active {
-      cursor: grabbing;
+      /* width / height are set inline at render time to the natural size */
     }
     .tree-tooltip {
       position: absolute;
@@ -1329,87 +1323,197 @@ async function loadTree() {
     const { nodes } = await res.json();
     if (!nodes || nodes.length === 0) { container.innerHTML = '<div class="empty-state"><em>🌳</em>No agents yet</div>'; return; }
 
-    const childrenMap = {};
+    // Re-create the SVG host and tooltip — previous render may have replaced
+    // the container's innerHTML with an empty-state or text card.
+    container.innerHTML = '<svg id="tree-svg"></svg><div id="tree-tooltip" class="tree-tooltip"></div>';
+    const svg = container.querySelector('#tree-svg');
+    const tooltip = container.querySelector('#tree-tooltip');
+    const SVG_NS = 'http://www.w3.org/2000/svg';
+
+    // ── Build adjacency ────────────────────────────────────────────────
+    // Primary lineage: parentIds[0] (mother for sexual repro) or parentId.
+    // Co-parents: parentIds[1..] — drawn as dashed edges, no layout effect.
     const byId = {};
-    let roots = [];
+    nodes.forEach(n => { byId[n.id] = n; });
+    function primaryParentId(n) {
+      const ids = n.parentIds && n.parentIds.length > 0 ? n.parentIds : (n.parentId ? [n.parentId] : []);
+      const present = ids.find(id => byId[id]);
+      return present || null;
+    }
+    function coParentIds(n) {
+      const ids = (n.parentIds || []).filter(id => byId[id]);
+      const primary = primaryParentId(n);
+      return ids.filter(id => id !== primary);
+    }
+
+    const childrenMap = {};
+    const roots = [];
     for (const n of nodes) {
-      byId[n.id] = n;
-      if (n.parentId === null || !nodes.some(x => x.id === n.parentId)) {
-        roots.push(n);
-      } else {
-        if (!childrenMap[n.parentId]) childrenMap[n.parentId] = [];
-        childrenMap[n.parentId].push(n);
+      const p = primaryParentId(n);
+      if (!p) { roots.push(n); continue; }
+      (childrenMap[p] = childrenMap[p] || []).push(n);
+    }
+    // Stable sort within each parent so layout is deterministic.
+    Object.values(childrenMap).forEach(arr => arr.sort((a, b) => a.id.localeCompare(b.id)));
+    roots.sort((a, b) => (a.generation - b.generation) || a.id.localeCompare(b.id));
+
+    // ── Layout: compute leaf-count per subtree, then position ─────────
+    const NODE_W = 130, NODE_H = 56;
+    const H_GAP = 18;          // horizontal gap between leaf cells
+    const V_GAP = 80;          // vertical gap between generations
+    const MARGIN_X = 24, MARGIN_Y = 24;
+
+    const leafCount = {};
+    function computeLeaves(node) {
+      const kids = childrenMap[node.id] || [];
+      if (kids.length === 0) { leafCount[node.id] = 1; return 1; }
+      const total = kids.reduce((s, k) => s + computeLeaves(k), 0);
+      leafCount[node.id] = total;
+      return total;
+    }
+    roots.forEach(computeLeaves);
+
+    const positions = {};
+    function place(node, leftCell, depth) {
+      const w = leafCount[node.id];
+      const cx = MARGIN_X + (leftCell + w / 2) * (NODE_W + H_GAP) - (NODE_W + H_GAP) / 2 + NODE_W / 2;
+      const cy = MARGIN_Y + depth * V_GAP + NODE_H / 2;
+      positions[node.id] = { x: cx, y: cy };
+      let cursor = leftCell;
+      const kids = childrenMap[node.id] || [];
+      for (const k of kids) { place(k, cursor, depth + 1); cursor += leafCount[k.id]; }
+    }
+    let cursor = 0;
+    for (const r of roots) { place(r, cursor, 0); cursor += leafCount[r.id]; }
+
+    const totalLeaves = cursor;
+    const maxDepth = Math.max(...nodes.map(n => {
+      let d = 0, cur = n;
+      while (primaryParentId(cur)) { d++; cur = byId[primaryParentId(cur)]; }
+      return d;
+    }), 0);
+    const widthPx = MARGIN_X * 2 + totalLeaves * (NODE_W + H_GAP);
+    const heightPx = MARGIN_Y * 2 + (maxDepth + 1) * V_GAP;
+
+    // Render at native pixel size; the container scrolls when the tree
+    // exceeds the viewport (better than scaling nodes down to unreadable).
+    svg.setAttribute('width', String(widthPx));
+    svg.setAttribute('height', String(heightPx));
+
+    // ── Draw edges first so nodes overlap them ────────────────────────
+    function curve(p1, p2) {
+      // Cubic Bezier with vertical tangents — looks like a family-tree branch.
+      const midY = (p1.y + p2.y) / 2;
+      return 'M' + p1.x + ',' + p1.y + ' C' + p1.x + ',' + midY + ' ' + p2.x + ',' + midY + ' ' + p2.x + ',' + p2.y;
+    }
+    for (const n of nodes) {
+      const pos = positions[n.id]; if (!pos) continue;
+      const primary = primaryParentId(n);
+      if (primary) {
+        const pp = positions[primary]; if (!pp) continue;
+        const p = document.createElementNS(SVG_NS, 'path');
+        p.setAttribute('d', curve({ x: pp.x, y: pp.y + NODE_H / 2 }, { x: pos.x, y: pos.y - NODE_H / 2 }));
+        p.setAttribute('stroke', '#30363d');
+        p.setAttribute('stroke-width', '1.5');
+        p.setAttribute('fill', 'none');
+        svg.appendChild(p);
+      }
+      for (const co of coParentIds(n)) {
+        const cp = positions[co]; if (!cp) continue;
+        const p = document.createElementNS(SVG_NS, 'path');
+        p.setAttribute('d', curve({ x: cp.x, y: cp.y + NODE_H / 2 }, { x: pos.x, y: pos.y - NODE_H / 2 }));
+        p.setAttribute('stroke', '#8b949e');
+        p.setAttribute('stroke-width', '1');
+        p.setAttribute('stroke-dasharray', '3,3');
+        p.setAttribute('fill', 'none');
+        p.setAttribute('opacity', '0.6');
+        svg.appendChild(p);
       }
     }
 
-    function shortId(id) { return (id || '').replace('agent_','').slice(0,8); }
+    // ── Draw nodes ────────────────────────────────────────────────────
+    function shortId(id) { return (id || '').replace('agent_', '').slice(0, 8); }
+    for (const n of nodes) {
+      const pos = positions[n.id]; if (!pos) continue;
+      const role = n.personaName || 'Unknown';
+      const color = ROLE_COLORS_MAP[role] || '#8b949e';
+      const alive = n.alive !== false;
+      const fit = n.fitness || 0;
+      const fitC = fit > 70 ? '#39d353' : fit > 40 ? '#d29922' : '#f85149';
 
-    function renderNode(node, depth) {
-      var role = node.personaName || 'Unknown';
-      var color = (typeof ROLE_COLORS_MAP !== 'undefined' && ROLE_COLORS_MAP[role]) || '#8b949e';
-      var alive = node.alive !== false;
-      var fc = node.fitness > 70 ? '#39d353' : node.fitness > 40 ? '#d29922' : '#f85149';
-      var fitness = node.fitness || 0;
-      var gen = node.generation || 0;
-      var parentLabel = node.parentId ? shortId(node.parentId) : 'root';
-      var op = alive ? 1 : 0.5;
+      const g = document.createElementNS(SVG_NS, 'g');
+      g.setAttribute('class', 'tree-node');
+      g.setAttribute('transform', 'translate(' + (pos.x - NODE_W / 2) + ',' + (pos.y - NODE_H / 2) + ')');
+      g.style.cursor = 'pointer';
+      g.style.opacity = alive ? '1' : '0.45';
 
-      var wrapper = document.createElement('div');
-      wrapper.style.cssText = 'margin-left:4px;margin-top:4px;';
+      const rect = document.createElementNS(SVG_NS, 'rect');
+      rect.setAttribute('width', NODE_W); rect.setAttribute('height', NODE_H);
+      rect.setAttribute('rx', '8'); rect.setAttribute('ry', '8');
+      rect.setAttribute('fill', color + '22');
+      rect.setAttribute('stroke', color + (alive ? 'aa' : '55'));
+      rect.setAttribute('stroke-width', '1.5');
+      g.appendChild(rect);
 
-      var card = document.createElement('div');
-      card.style.cssText = [
-        'display:inline-block',
-        'min-width:150px',
-        'padding:8px 12px',
-        'border-radius:8px',
-        'background:' + color + '18',
-        'border:1.5px solid ' + color + '44',
-        'opacity:' + op,
-        'cursor:pointer',
-        'transition:transform 0.15s',
-      ].join(';');
-      card.onmouseenter = function() { card.style.transform = 'translateY(-2px)'; };
-      card.onmouseleave = function() { card.style.transform = 'translateY(0)'; };
+      const t1 = document.createElementNS(SVG_NS, 'text');
+      t1.setAttribute('x', 10); t1.setAttribute('y', 18);
+      t1.setAttribute('fill', color); t1.setAttribute('font-weight', '700');
+      t1.setAttribute('font-size', '12'); t1.textContent = role;
+      g.appendChild(t1);
 
-      var aliveBadge = alive
-        ? '<span style="font-size:10px;color:#39d353">● live</span>'
-        : '<span style="font-size:10px;color:#f85149">● dead</span>';
+      const t2 = document.createElementNS(SVG_NS, 'text');
+      t2.setAttribute('x', NODE_W - 10); t2.setAttribute('y', 18);
+      t2.setAttribute('text-anchor', 'end');
+      t2.setAttribute('fill', '#8b949e'); t2.setAttribute('font-size', '10');
+      t2.textContent = 'gen ' + (n.generation || 0);
+      g.appendChild(t2);
 
-      card.innerHTML =
-        '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:4px">' +
-          '<span style="font-weight:700;color:' + color + ';font-size:13px">' + role + '</span>' +
-          '<span style="font-size:10px;padding:1px 6px;border-radius:3px;background:#0d1117;color:#8b949e">Gen ' + gen + '</span>' +
-        '</div>' +
-        '<div style="font-family:monospace;font-size:10px;color:#e6edf3;margin-bottom:3px">' +
-          '<span style="color:#6e7681">id:</span> ' + shortId(node.id) +
-        '</div>' +
-        '<div style="font-family:monospace;font-size:10px;color:#8b949e;margin-bottom:3px">' +
-          '<span style="color:#6e7681">parent:</span> ' + parentLabel +
-        '</div>' +
-        '<div style="display:flex;justify-content:space-between;align-items:center;font-size:11px">' +
-          '<span style="color:' + fc + ';font-weight:600">fit ' + fitness.toFixed(1) + '</span>' +
-          aliveBadge +
-        '</div>';
+      const t3 = document.createElementNS(SVG_NS, 'text');
+      t3.setAttribute('x', 10); t3.setAttribute('y', 34);
+      t3.setAttribute('fill', '#e6edf3'); t3.setAttribute('font-size', '10');
+      t3.setAttribute('font-family', 'ui-monospace, monospace');
+      t3.textContent = shortId(n.id);
+      g.appendChild(t3);
 
-      wrapper.appendChild(card);
+      const t4 = document.createElementNS(SVG_NS, 'text');
+      t4.setAttribute('x', 10); t4.setAttribute('y', 48);
+      t4.setAttribute('fill', fitC); t4.setAttribute('font-size', '10'); t4.setAttribute('font-weight', '600');
+      t4.textContent = 'fit ' + fit.toFixed(1);
+      g.appendChild(t4);
 
-      var kids = childrenMap[node.id] || [];
-      if (kids.length > 0) {
-        var kidsBox = document.createElement('div');
-        kidsBox.style.cssText = 'margin-left:24px;padding-left:16px;border-left:2px solid ' + color + '55;margin-top:4px;position:relative;';
-        kids.forEach(function(k) { kidsBox.appendChild(renderNode(k, depth + 1)); });
-        wrapper.appendChild(kidsBox);
-      }
+      const t5 = document.createElementNS(SVG_NS, 'text');
+      t5.setAttribute('x', NODE_W - 10); t5.setAttribute('y', 48);
+      t5.setAttribute('text-anchor', 'end');
+      t5.setAttribute('fill', alive ? '#39d353' : '#f85149');
+      t5.setAttribute('font-size', '10');
+      t5.textContent = alive ? '● live' : '● dead';
+      g.appendChild(t5);
 
-      return wrapper;
+      g.addEventListener('mouseenter', (ev) => {
+        const parents = (n.parentIds && n.parentIds.length > 0)
+          ? n.parentIds.map(shortId).join(', ')
+          : (n.parentId ? shortId(n.parentId) : 'root');
+        tooltip.innerHTML =
+          '<div class="tt-name">' + role + '</div>' +
+          '<div class="tt-row"><span class="tt-label">id:</span> ' + shortId(n.id) + '</div>' +
+          '<div class="tt-row"><span class="tt-label">gen:</span> ' + (n.generation || 0) + '</div>' +
+          '<div class="tt-row"><span class="tt-label">parents:</span> ' + parents + '</div>' +
+          '<div class="tt-row"><span class="tt-label">fitness:</span> <span style="color:' + fitC + '">' + fit.toFixed(1) + '</span></div>' +
+          '<div class="tt-row"><span class="tt-label">status:</span> <span class="' + (alive ? 'tt-alive' : 'tt-dead') + '">' + (alive ? 'alive' : 'dead') + '</span></div>';
+        const rect = container.getBoundingClientRect();
+        tooltip.style.left = (ev.clientX - rect.left + 12) + 'px';
+        tooltip.style.top = (ev.clientY - rect.top + 12) + 'px';
+        tooltip.classList.add('visible');
+      });
+      g.addEventListener('mousemove', (ev) => {
+        const rect = container.getBoundingClientRect();
+        tooltip.style.left = (ev.clientX - rect.left + 12) + 'px';
+        tooltip.style.top = (ev.clientY - rect.top + 12) + 'px';
+      });
+      g.addEventListener('mouseleave', () => tooltip.classList.remove('visible'));
+
+      svg.appendChild(g);
     }
-
-    container.innerHTML = '';
-    var scroller = document.createElement('div');
-    scroller.style.cssText = 'padding:16px;overflow:auto;height:100%;width:100%;';
-    roots.forEach(function(r) { scroller.appendChild(renderNode(r, 0)); });
-    container.appendChild(scroller);
 
   } catch (err) {
     console.error('Tree failed:', err);
