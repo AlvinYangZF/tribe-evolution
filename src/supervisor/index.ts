@@ -375,6 +375,14 @@ export class Supervisor extends EventEmitter {
       for (const file of await fs.readdir(dir)) {
         if (!file.endsWith('.json')) continue;
         const agent = JSON.parse(await fs.readFile(path.join(dir, file), 'utf-8')) as AgentState;
+        // Defensive: re-express the haploid `genome` from the diploid source
+        // of truth so any on-disk drift between the two views is corrected.
+        // The diploid is the genetic state; the haploid is its expressed
+        // snapshot. Reproduction and develop_skill keep them in sync, but
+        // hand-edits or third-party writers might not.
+        if (agent.diploidGenome) {
+          agent.genome = expressedToGenome(expressGenome(agent.diploidGenome));
+        }
         this.agents.set(agent.id, agent);
       }
     } catch { /* dir may not exist */ }

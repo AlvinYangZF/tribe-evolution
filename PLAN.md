@@ -128,12 +128,15 @@ User decided to keep both deployment shells (in-process supervisor and JSON-RPC 
 
 Result: 221/221 non-dashboard tests pass. `agent/llm-proxy.ts` (the genome→prompt helper, distinct from the LLM client) is left in place.
 
-### PR-5: genome model
+### PR-5: genome model — ✅ DONE
 
-- B2 + B3 — collapse haploid + diploid: make `agent.genome` a derived view (computed at load time or on demand), drop the legacy haploid mutators.
-- Aligns with PR-2's `develop_skill` fix.
+Conservative scope: the active drift risk was eliminated in PR-2 (the only two mutation paths — reproduction and `develop_skill` — both keep the views in sync). PR-5 adds defense for off-path drift and removes the legacy haploid mutators that could be silently misused.
 
-Estimated effort: 1 day. Risk: medium (touches every site that constructs an `AgentState`).
+- ✅ B2 — `Supervisor.loadAgents()` now re-expresses `agent.genome` from `agent.diploidGenome` after JSON parse. Any on-disk drift (manual edits, third-party writers, replays from older code) is silently corrected. The diploid stays the source of truth; the haploid is treated as a derived snapshot.
+- ✅ B3 — deleted `mutate`, `forceMutate`, `cloneGenome`, and `applyMutation` from `agent/genome.ts`. They were exported but unused by the live cycle, and a future contributor reaching for `mutate(genome)` would have hit a silent bug (mutation lost at the next reproduction). Test file `tests/unit/agent.genome.test.ts` updated to drop the matching describe blocks.
+- ⏭ Not done: making `agent.genome` a real getter / dropping the field entirely. That requires changing every read site (brain, dashboard, logging, JSON serialization). Worth doing later but the cost/benefit isn't there now that drift is bounded.
+
+Result: 215/215 non-dashboard tests pass (was 221; the -6 are the deleted legacy-mutator tests).
 
 ### PR-6: security hardening
 
