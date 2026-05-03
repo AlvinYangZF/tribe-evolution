@@ -145,6 +145,24 @@ describe('compileAgentPrompt', () => {
     expect(prompt).not.toContain('You are a');
     expect(prompt).not.toContain('Sexual reproduction');
   });
+
+  it('should include the Notes section when state has memory', () => {
+    const prompt = compileAgentPrompt(makeGenome(), makeState({ memory: 'I beat Hunter at code_review last cycle.' }), makeEnv());
+    expect(prompt).toContain('Your Notes');
+    expect(prompt).toContain('I beat Hunter at code_review last cycle.');
+  });
+
+  it('should omit the Notes section when memory is empty or missing', () => {
+    const promptA = compileAgentPrompt(makeGenome(), makeState({ memory: '' }), makeEnv());
+    const promptB = compileAgentPrompt(makeGenome(), makeState({ memory: undefined }), makeEnv());
+    expect(promptA).not.toContain('Your Notes');
+    expect(promptB).not.toContain('Your Notes');
+  });
+
+  it('should advertise update_memory in the actions list', () => {
+    const prompt = compileAgentPrompt(makeGenome(), makeState(), makeEnv());
+    expect(prompt).toContain('update_memory');
+  });
 });
 
 describe('parseDecision', () => {

@@ -16,6 +16,7 @@ import { ensureDir, safeWriteJSON } from '../shared/filesystem.js';
 import { BountyBoard } from './bounty-board.js';
 import { Treasury } from './treasury.js';
 import { attributeBountyOutcome, evaluateSkillPromotion, verdictToDelta } from './skill-evaluator.js';
+import { readMemory, writeMemory, inheritMemory, MEMORY_LIMIT_BYTES } from './workspace.js';
 import type { AgentState, SkillName } from '../shared/types.js';
 
 const ALL_SKILL_NAMES: SkillName[] = ['web_search', 'code_write', 'data_analyze', 'artifact_write', 'observe', 'propose'];
@@ -85,6 +86,7 @@ async function decideForAgent(
   pendingDigest: DigestEntry[],
   snapshot: CycleSnapshot,
   eventLog: EventLog,
+  ecosystemDir: string,
 ): Promise<void> {
   const appendEvent = (e: AppendEventInput) => eventLog.append(e);
   agent.age += 1;
@@ -107,12 +109,14 @@ async function decideForAgent(
       return resp.content;
     };
 
+    const memory = await readMemory(ecosystemDir, agent.id);
     const decision = await decide(g, {
       balance: agent.tokenBalance,
       age: agent.age,
       reputation: agent.reputation,
       generation: agent.generation,
       gender: agent.diploidGenome?.gender,
+      memory,
     }, {
       aliveCount,
       pendingMessages: 0,
@@ -153,6 +157,7 @@ async function decideForAgent(
     else if (decision.action === 'propose') score = 60;
     else if (decision.action === 'lock_resource') score = 25;
     else if (decision.action === 'trade') score = 30;
+    else if (decision.action === 'update_memory') score = 30;
     else if (decision.action === 'observe') score = 15;
 
     agent.contributionScore = score;
@@ -208,6 +213,20 @@ async function decideForAgent(
         agent.contributionScore += delta > 0 ? 20 : 5;
         console.log(`  🔬 ${agent.id} trained ${skill} (${evaluation.verdict}, ${evaluation.sampleSize} samples, rate ${evaluation.rate.toFixed(2)}; ${allele}: ${before.toFixed(2)} → ${after.toFixed(2)})`);
         await saveAgent(agent);
+      }
+    }
+
+    // When agent chooses 'update_memory', overwrite its persistent notes.
+    // The new content is the agent's own working memory for next cycles
+    // and is inherited by offspring on reproduction.
+    if (decision.action === 'update_memory') {
+      const content = typeof decision.params?.content === 'string' ? decision.params.content : '';
+      if (content.trim().length === 0) {
+        agent.contributionScore = 10;
+      } else {
+        const written = await writeMemory(ecosystemDir, agent.id, content);
+        const truncated = Buffer.byteLength(content, 'utf-8') > MEMORY_LIMIT_BYTES;
+        console.log(`  📝 ${agent.id} updated memory (${written} bytes${truncated ? ', truncated' : ''})`);
       }
     }
 
@@ -456,6 +475,7 @@ export class Supervisor extends EventEmitter {
           this.pendingDigest,
           snapshot,
           this.eventLog,
+          this.config.ecosystemDir,
         )
       )
     );
@@ -493,6 +513,18 @@ export class Supervisor extends EventEmitter {
     const newBorns = evolved.filter(a => a.age <= 1 && a.generation > 0);
     for (const a of newBorns) {
       await this.eventLog.append({ type: 'agent_born', agentId: a.id, actorType: 'agent', data: { generation: a.generation, parentId: a.parentId, personaName: a.genome.personaName } });
+      // Inherit memory from a random parent (or the single parent for asexual
+      // offspring). Best-effort — failure here doesn't block the cycle.
+      const parents = a.parentIds && a.parentIds.length > 0 ? a.parentIds : (a.parentId ? [a.parentId] : []);
+      if (parents.length > 0) {
+        const chosen = parents[Math.floor(Math.random() * parents.length)];
+        try {
+          await inheritMemory(this.config.ecosystemDir, chosen, a.id);
+        } catch (err: unknown) {
+          const m = err instanceof Error ? err.message : String(err);
+          console.warn(`  ⚠️ Memory inheritance failed for ${a.id}: ${m}`);
+        }
+      }
       console.log(`  🐣 New: ${a.id} (${a.genome.personaName}) gen=${a.generation}`);
     }
 

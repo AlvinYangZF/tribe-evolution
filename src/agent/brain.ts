@@ -18,7 +18,7 @@ export type DecisionAction =
   | 'propose'
   | 'lock_resource'
   | 'trade'
-  | 'bid_bounty' | 'develop_skill' | 'idle';
+  | 'bid_bounty' | 'develop_skill' | 'update_memory' | 'idle';
 
 export const ALL_DECISION_ACTIONS: DecisionAction[] = [
   'web_search',
@@ -29,6 +29,7 @@ export const ALL_DECISION_ACTIONS: DecisionAction[] = [
   'trade',
   'bid_bounty',
   'develop_skill',
+  'update_memory',
   'idle',
 ];
 
@@ -62,6 +63,9 @@ export interface AgentStateForBrain {
   reputation: number;
   generation: number;
   gender?: string;
+  /** Long-term notes the agent has written to its workspace. Injected into
+   *  the prompt as a "Your Notes" section. Empty string means no notes. */
+  memory?: string;
 }
 
 /** Environment snapshot injected by the supervisor */
@@ -93,6 +97,7 @@ const ACTION_DESCRIPTIONS: Record<DecisionAction, string> = {
   propose: '向人类用户提建议',
   lock_resource: '抢占一个资源',
   trade: '出价购买资源释放权',
+  update_memory: '用 params.content 重写你的私人备忘录（最多 4000 字节，跨周期保留，子代会继承）',
   idle: '本周期什么都不做（省钱）',
 };
 
@@ -132,6 +137,13 @@ You are a ${state.gender} agent. Sexual reproduction requires a partner of the o
 1. SURVIVE as long as possible (age >= 50 = death)
 2. Find a mate and REPRODUCE to pass on your genes`;
 
+  // Long-term notes the agent has written for itself (or inherited from a
+  // parent). Truncated to keep the prompt bounded — the on-disk file allows
+  // up to MEMORY_LIMIT_BYTES, but we only show ~1500 chars to the LLM.
+  const memorySection = state.memory && state.memory.trim().length > 0
+    ? `\n\n## Your Notes (persistent across cycles)\n${state.memory.length > 1500 ? state.memory.slice(0, 1500) + '\n…' : state.memory}`
+    : '';
+
   // Proactivity modifier based on traits
   let proactivityNote = "";
   if (genome.communicationFreq > 0.7) {
@@ -162,7 +174,7 @@ ${activeSkills || '(none yet)'}
 - Tokens: ${state.balance}
 - Age: ${state.age} cycles
 - Reputation: ${state.reputation.toFixed(2)}
-- Generation: ${state.generation}
+- Generation: ${state.generation}${memorySection}
 ${proactivityNote}
 
 ## Ecosystem
