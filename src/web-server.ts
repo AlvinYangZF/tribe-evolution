@@ -63,8 +63,10 @@ const server = http.createServer(async (req, res) => {
         // in practice, but TypeScript correctly forces us to narrow.
         const firstHeader = (h: string | string[] | undefined): string | undefined =>
           Array.isArray(h) ? h[0] : h;
-        const contentType = firstHeader(req.headers['content-type']);
-        if (body) headers['Content-Type'] = contentType || 'application/json';
+        if (body) {
+          const contentType = firstHeader(req.headers['content-type']);
+          headers['Content-Type'] = contentType || 'application/json';
+        }
         const cookie = firstHeader(req.headers['cookie']);
         if (cookie) headers['Cookie'] = cookie;
         const authToken = firstHeader(req.headers['x-auth-token']);
