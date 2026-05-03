@@ -58,9 +58,17 @@ const server = http.createServer(async (req, res) => {
           });
         }
         const headers: Record<string, string> = {};
-        if (body) headers['Content-Type'] = req.headers['content-type'] || 'application/json';
-        if (req.headers['cookie']) headers['Cookie'] = req.headers['cookie'];
-        if (req.headers['x-auth-token']) headers['X-Auth-Token'] = req.headers['x-auth-token'];
+        // Node's IncomingHttpHeaders returns string | string[] for repeated
+        // headers (e.g. set-cookie). Cookie and X-Auth-Token are single-value
+        // in practice, but TypeScript correctly forces us to narrow.
+        const firstHeader = (h: string | string[] | undefined): string | undefined =>
+          Array.isArray(h) ? h[0] : h;
+        const contentType = firstHeader(req.headers['content-type']);
+        if (body) headers['Content-Type'] = contentType || 'application/json';
+        const cookie = firstHeader(req.headers['cookie']);
+        if (cookie) headers['Cookie'] = cookie;
+        const authToken = firstHeader(req.headers['x-auth-token']);
+        if (authToken) headers['X-Auth-Token'] = authToken;
         const proxyRes = await fetch(proxyUrl, { method: req.method || 'GET', headers, body });
         const data = Buffer.from(await proxyRes.arrayBuffer());
         res.writeHead(proxyRes.status || 200, { 'Content-Type': proxyRes.headers.get('content-type') || 'application/json', 'Access-Control-Allow-Origin': '*' });
