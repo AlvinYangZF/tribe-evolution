@@ -1334,7 +1334,7 @@ function updateDashboard(data) {
   if (!agents || agents.length === 0) {
     grid.innerHTML = '<div class="empty-state"><em>🤖</em>No agents yet</div>';
   } else {
-    grid.innerHTML = agents.map(renderAgentCard).join('');
+    grid.innerHTML = agents.filter(a => a.alive !== false).map(renderAgentCard).join('');
     document.getElementById('agent-count').textContent = agents.length;
   }
 
