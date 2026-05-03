@@ -4,6 +4,12 @@ export type ResourceType = 'file_lock' | 'skill_package' | 'disk_quota' | 'tool_
 export type EventType = 'token_allocated' | 'task_completed' | 'deal_kept' | 'deal_broken' | 'resource_locked' | 'resource_released' | 'agent_born' | 'agent_extinct' | 'mutation' | 'proposal_created' | 'proposal_approved' | 'proposal_rejected' | 'llm_call' | 'cycle_start' | 'cycle_end' | 'decision_invalid';
 export type MessagePriority = 'high' | 'normal' | 'low';
 export type DealStatus = 'open' | 'locked' | 'completed' | 'breached';
+/** Who took an action: an evolved agent, the supervisor itself, or a human user
+ *  (e.g. proposal approval via email). Stored alongside agentId on every event
+ *  so the audit trail can distinguish between actors without parsing magic
+ *  strings. Optional on EventLogEntry for backward-compat with logs written
+ *  before this field existed; new writes always set it. */
+export type ActorType = 'agent' | 'supervisor' | 'user';
 
 export interface Genome {
   personaName: string;
@@ -61,7 +67,12 @@ export interface EventLogEntry {
   index: number;
   timestamp: number;
   type: EventType;
+  /** Actor id. For agent events this is the agent's id; for supervisor-driven
+   *  events it is the literal string 'supervisor'; for user-driven events
+   *  (e.g. email-approved proposals) it is 'user'. Disambiguate via actorType. */
   agentId: string;
+  /** Optional only for backward-compat with old log entries. New writes always set it. */
+  actorType?: ActorType;
   data: Record<string, unknown>;
   prevHash: string;
   hash: string;

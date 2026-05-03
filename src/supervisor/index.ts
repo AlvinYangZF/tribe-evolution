@@ -127,6 +127,7 @@ async function decideForAgent(
       await appendEvent({
         type: 'decision_invalid',
         agentId: agent.id,
+        actorType: 'agent',
         data: {
           cycle: cycleNum,
           reason: decision.fallbackReason,
@@ -372,7 +373,7 @@ export class Supervisor extends EventEmitter {
       }
     } catch { /* no persisted state on first run */ }
 
-    await this.eventLog.append({ type: 'agent_born', agentId: 'supervisor', data: { action: 'start', agentCount: this.agents.size } });
+    await this.eventLog.append({ type: 'agent_born', agentId: 'supervisor', actorType: 'supervisor', data: { action: 'start', agentCount: this.agents.size } });
     console.log(`✅ ${this.agents.size} agents loaded, starting cycles...`);
 
     // Sync config to ecosystem for dashboard
@@ -416,7 +417,7 @@ export class Supervisor extends EventEmitter {
   }
 
   private async runCycle(cycleNum: number): Promise<void> {
-    await this.eventLog.append({ type: 'cycle_start', agentId: 'supervisor', data: { cycle: cycleNum } });
+    await this.eventLog.append({ type: 'cycle_start', agentId: 'supervisor', actorType: 'supervisor', data: { cycle: cycleNum } });
     console.log(`\n🔄 Cycle ${cycleNum} — ${this.agents.size} agents`);
     await this.loadAgents();
 
@@ -464,7 +465,7 @@ export class Supervisor extends EventEmitter {
     await this.processBountyExecutions(alive);
 
     for (const agent of alive) {
-      await this.eventLog.append({ type: 'task_completed', agentId: agent.id, data: { cycle: cycleNum, contribution: agent.contributionScore } });
+      await this.eventLog.append({ type: 'task_completed', agentId: agent.id, actorType: 'agent', data: { cycle: cycleNum, contribution: agent.contributionScore } });
     }
 
     // Only feed living agents into the lifecycle. Already-dead agents stay
@@ -485,13 +486,13 @@ export class Supervisor extends EventEmitter {
 
     const newBorns = evolved.filter(a => a.age <= 1 && a.generation > 0);
     for (const a of newBorns) {
-      await this.eventLog.append({ type: 'agent_born', agentId: a.id, data: { generation: a.generation, parentId: a.parentId, personaName: a.genome.personaName } });
+      await this.eventLog.append({ type: 'agent_born', agentId: a.id, actorType: 'agent', data: { generation: a.generation, parentId: a.parentId, personaName: a.genome.personaName } });
       console.log(`  🐣 New: ${a.id} (${a.genome.personaName}) gen=${a.generation}`);
     }
 
     const extinct = evolved.filter(a => !a.alive);
     for (const a of extinct) {
-      await this.eventLog.append({ type: 'agent_extinct', agentId: a.id, data: { generation: a.generation, age: a.age, fitness: a.fitness } });
+      await this.eventLog.append({ type: 'agent_extinct', agentId: a.id, actorType: 'agent', data: { generation: a.generation, age: a.age, fitness: a.fitness } });
       console.log(`  💀 Extinct: ${a.id} (${a.genome.personaName}) age=${a.age}`);
     }
 
@@ -528,7 +529,7 @@ export class Supervisor extends EventEmitter {
     const totalFitness = alive.reduce((s, a) => s + a.fitness, 0);
     const avgFitness = alive.length > 0 ? (totalFitness / alive.length).toFixed(1) : '0';
     console.log(`  📊 ${alive.length} alive, avg fitness: ${avgFitness}`);
-    await this.eventLog.append({ type: 'cycle_end', agentId: 'supervisor', data: { cycle: cycleNum, aliveCount: alive.length, avgFitness } });
+    await this.eventLog.append({ type: 'cycle_end', agentId: 'supervisor', actorType: 'supervisor', data: { cycle: cycleNum, aliveCount: alive.length, avgFitness } });
   }
 
 
@@ -568,7 +569,7 @@ export class Supervisor extends EventEmitter {
           winner.tokenBalance += bounty.reward;
           await this.saveAgent(winner);
           console.log("  ✅ Bounty completed! " + winner.id + " earned " + bounty.reward + " tokens");
-          await this.eventLog.append({ type: 'task_completed', agentId: winner.id, data: { action: 'bounty_completed', bountyId: bounty.id, reward: bounty.reward } });
+          await this.eventLog.append({ type: 'task_completed', agentId: winner.id, actorType: 'agent', data: { action: 'bounty_completed', bountyId: bounty.id, reward: bounty.reward } });
         } else {
           await this.bountyBoard.failVerification(bounty.id);
           console.log("  ❌ Bounty verification failed: " + bounty.title.slice(0,30) + " (" + result.results.join('; ').slice(0,80) + ")");
@@ -591,7 +592,7 @@ export class Supervisor extends EventEmitter {
         if (this.seenProposalIds.has(p.id)) continue;
         this.seenProposalIds.add(p.id);
         console.log(`  📩 Proposal from ${p.agentId}: "${p.title}"`);
-        await this.eventLog.append({ type: 'proposal_created', agentId: p.agentId, data: { proposalId: p.id, title: p.title } });
+        await this.eventLog.append({ type: 'proposal_created', agentId: p.agentId, actorType: 'agent', data: { proposalId: p.id, title: p.title } });
         notifyUser(nc, { agentId: p.agentId, type: p.type, title: p.title, description: p.description, tokenCost: p.tokenCost, proposalId: p.id }).catch(() => {});
       }
       const expired = await this.proposalManager.expireOldProposals();
@@ -604,7 +605,7 @@ export class Supervisor extends EventEmitter {
   async shutdown(): Promise<void> {
     this.scheduler.stop();
     if (this.started) {
-      await this.eventLog.append({ type: 'agent_extinct', agentId: 'supervisor', data: { action: 'shutdown' } });
+      await this.eventLog.append({ type: 'agent_extinct', agentId: 'supervisor', actorType: 'supervisor', data: { action: 'shutdown' } });
     }
     this.started = false;
   }
@@ -647,6 +648,7 @@ export class Supervisor extends EventEmitter {
             await this.eventLog.append({
               type: 'proposal_created',
               agentId: 'user',
+              actorType: 'user',
               data: { action: 'approved_via_email', proposalId },
             });
           } else {
@@ -655,6 +657,7 @@ export class Supervisor extends EventEmitter {
             await this.eventLog.append({
               type: 'proposal_created',
               agentId: 'user',
+              actorType: 'user',
               data: { action: 'rejected_via_email', proposalId, reason },
             });
           }

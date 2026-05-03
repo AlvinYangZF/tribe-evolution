@@ -1175,19 +1175,35 @@ function eventIcon(type) {
   return icons[type] || '⚪';
 }
 
+// Derive a display label from polymorphic actor fields, falling back to magic
+// strings for events written before actorType existed.
+function actorLabel(entry) {
+  const type = entry.actorType
+    || (entry.agentId === 'supervisor' ? 'supervisor'
+      : entry.agentId === 'user' ? 'user'
+      : 'agent');
+  if (type === 'supervisor') return { icon: '🧠', name: 'Supervisor' };
+  if (type === 'user') return { icon: '👤', name: 'User' };
+  return { icon: '🤖', name: `Agent <strong>${entry.agentId}</strong>` };
+}
+
 function eventMsg(entry) {
-  const { type, agentId, data } = entry;
+  const { type } = entry;
+  const a = actorLabel(entry);
   switch (type) {
-    case 'agent_born': return `Agent <strong>${agentId}</strong> was born`;
-    case 'agent_extinct': return `Agent <strong>${agentId}</strong> went extinct`;
-    case 'task_completed': return `Agent <strong>${agentId}</strong> completed a task`;
-    case 'resource_locked': return `Agent <strong>${agentId}</strong> locked a resource`;
-    case 'resource_released': return `Agent <strong>${agentId}</strong> released a resource`;
-    case 'deal_kept': return `Agent <strong>${agentId}</strong> kept a deal`;
-    case 'deal_broken': return `Agent <strong>${agentId}</strong> broke a deal`;
-    case 'token_allocated': return `Agent <strong>${agentId}</strong> received tokens`;
-    case 'mutation': return `Agent <strong>${agentId}</strong> mutated`;
-    default: return `Agent <strong>${agentId}</strong> — ${type}`;
+    case 'agent_born': return `${a.icon} ${a.name} was born`;
+    case 'agent_extinct': return `${a.icon} ${a.name} went extinct`;
+    case 'task_completed': return `${a.icon} ${a.name} completed a task`;
+    case 'resource_locked': return `${a.icon} ${a.name} locked a resource`;
+    case 'resource_released': return `${a.icon} ${a.name} released a resource`;
+    case 'deal_kept': return `${a.icon} ${a.name} kept a deal`;
+    case 'deal_broken': return `${a.icon} ${a.name} broke a deal`;
+    case 'token_allocated': return `${a.icon} ${a.name} received tokens`;
+    case 'mutation': return `${a.icon} ${a.name} mutated`;
+    case 'cycle_start': return `${a.icon} ${a.name} started a cycle`;
+    case 'cycle_end': return `${a.icon} ${a.name} ended a cycle`;
+    case 'decision_invalid': return `${a.icon} ${a.name} produced a malformed decision`;
+    default: return `${a.icon} ${a.name} — ${type}`;
   }
 }
 
