@@ -187,23 +187,29 @@ describe('parseDecision', () => {
     expect(result.action).toBe('idle');
     expect(result.params).toEqual({});
     expect(result.reasoning).toBe('LLM returned invalid response');
+    expect(result.fallbackReason).toBe('json_parse');
+    expect(result.rawResponse).toBe('not json at all');
   });
 
   it('should fallback to idle when response is empty string', () => {
     const result = parseDecision('');
     expect(result.action).toBe('idle');
     expect(result.params).toEqual({});
+    expect(result.fallbackReason).toBe('empty_response');
   });
 
   it('should fallback to idle when response is null', () => {
     const result = parseDecision(null as unknown as string);
     expect(result.action).toBe('idle');
+    expect(result.fallbackReason).toBe('empty_response');
   });
 
   it('should fallback to idle when JSON is missing action field', () => {
     const response = JSON.stringify({ params: {}, reasoning: 'no action' });
     const result = parseDecision(response);
     expect(result.action).toBe('idle');
+    expect(result.fallbackReason).toBe('schema_mismatch');
+    expect(result.rawResponse).toBe(response);
   });
 
   it('should fallback to idle when action is not a valid action type', () => {
@@ -214,6 +220,38 @@ describe('parseDecision', () => {
     });
     const result = parseDecision(response);
     expect(result.action).toBe('idle');
+    expect(result.fallbackReason).toBe('schema_mismatch');
+  });
+
+  it('should fallback to idle when propose action is missing both title and description', () => {
+    const response = JSON.stringify({
+      action: 'propose',
+      params: {},
+      reasoning: 'no fields',
+    });
+    const result = parseDecision(response);
+    expect(result.action).toBe('idle');
+    expect(result.fallbackReason).toBe('missing_propose_fields');
+  });
+
+  it('should not set fallbackReason on a legitimate idle decision', () => {
+    const response = JSON.stringify({
+      action: 'idle',
+      params: {},
+      reasoning: 'saving tokens',
+    });
+    const result = parseDecision(response);
+    expect(result.action).toBe('idle');
+    expect(result.fallbackReason).toBeUndefined();
+    expect(result.rawResponse).toBeUndefined();
+  });
+
+  it('should truncate raw response longer than 200 chars', () => {
+    const long = 'x'.repeat(300);
+    const result = parseDecision(long);
+    expect(result.fallbackReason).toBe('json_parse');
+    expect(result.rawResponse?.length).toBeLessThanOrEqual(201); // 200 + ellipsis
+    expect(result.rawResponse?.endsWith('…')).toBe(true);
   });
 
   it('should handle JSON with extra whitespace or newlines', () => {
@@ -260,6 +298,7 @@ describe('decide (integration-style with mock LLM)', () => {
     expect(result.action).toBe('idle');
     expect(result.params).toEqual({});
     expect(result.reasoning).toBe('LLM returned invalid response');
+    expect(result.fallbackReason).toBe('json_parse');
   });
 
   it('should return idle when mock LLM throws an error', async () => {
@@ -273,6 +312,7 @@ describe('decide (integration-style with mock LLM)', () => {
     expect(result.action).toBe('idle');
     expect(result.params).toEqual({});
     expect(result.reasoning).toContain('LLM call failed');
+    expect(result.fallbackReason).toBe('llm_error');
   });
 
   it('should pass system prompt and user message to callLLM', async () => {

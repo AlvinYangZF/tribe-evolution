@@ -32,10 +32,27 @@ export const ALL_DECISION_ACTIONS: DecisionAction[] = [
   'idle',
 ];
 
+/**
+ * Why a decision was synthesized as an idle fallback. Absent when the LLM
+ * legitimately chose an action (including idle on its own). The supervisor
+ * uses this to decide whether to surface a `decision_invalid` event so
+ * malformed LLM output is visible in the audit trail instead of silently
+ * collapsing to idle.
+ */
+export type DecisionFallbackReason =
+  | 'empty_response'
+  | 'json_parse'
+  | 'schema_mismatch'
+  | 'missing_propose_fields'
+  | 'llm_error';
+
 export interface AgentDecision {
   action: DecisionAction;
   params: Record<string, unknown>;
   reasoning: string;
+  fallbackReason?: DecisionFallbackReason;
+  /** Truncated raw LLM output. Only set on parse/schema fallbacks. */
+  rawResponse?: string;
 }
 
 /** Subset of AgentState needed by the brain prompt */
@@ -175,6 +192,12 @@ const IDLE_DECISION: AgentDecision = {
   reasoning: 'LLM returned invalid response',
 };
 
+const RAW_RESPONSE_LIMIT = 200;
+
+function truncate(s: string, n = RAW_RESPONSE_LIMIT): string {
+  return s.length <= n ? s : s.slice(0, n) + '…';
+}
+
 const DecisionSchema = z.object({
   action: z.enum(ALL_DECISION_ACTIONS as [DecisionAction, ...DecisionAction[]]),
   params: z.looseObject({}),
@@ -183,23 +206,29 @@ const DecisionSchema = z.object({
 
 /**
  * Parse the LLM's JSON response into a structured AgentDecision.
- * Falls back to idle on any parse failure or invalid action type.
+ * Falls back to idle on any parse failure or invalid action type, tagging
+ * the result with `fallbackReason` so the caller can audit it.
  */
 export function parseDecision(llmResponse: string): AgentDecision {
   if (!llmResponse || llmResponse.trim().length === 0) {
-    return { ...IDLE_DECISION };
+    return { ...IDLE_DECISION, fallbackReason: 'empty_response' };
   }
 
   let raw: unknown;
   try {
     raw = JSON.parse(llmResponse.trim());
   } catch {
-    return { ...IDLE_DECISION };
+    return { ...IDLE_DECISION, fallbackReason: 'json_parse', rawResponse: truncate(llmResponse) };
   }
 
   const parsed = DecisionSchema.safeParse(raw);
   if (!parsed.success) {
-    return { ...IDLE_DECISION, reasoning: `LLM response did not match schema: ${parsed.error.message.slice(0, 80)}` };
+    return {
+      ...IDLE_DECISION,
+      reasoning: `LLM response did not match schema: ${parsed.error.message.slice(0, 80)}`,
+      fallbackReason: 'schema_mismatch',
+      rawResponse: truncate(llmResponse),
+    };
   }
 
   const { action, params, reasoning } = parsed.data;
@@ -209,7 +238,12 @@ export function parseDecision(llmResponse: string): AgentDecision {
     const hasTitle = typeof params.title === 'string' && params.title.trim().length > 0;
     const hasDescription = typeof params.description === 'string' && params.description.trim().length > 0;
     if (!hasTitle && !hasDescription) {
-      return { ...IDLE_DECISION, reasoning: 'LLM propose action missing title or description' };
+      return {
+        ...IDLE_DECISION,
+        reasoning: 'LLM propose action missing title or description',
+        fallbackReason: 'missing_propose_fields',
+        rawResponse: truncate(llmResponse),
+      };
     }
   }
 
@@ -248,7 +282,8 @@ export async function decide(
     return {
       action: 'idle',
       params: {},
-      reasoning: `LLM call failed: ${(err as Error).message}`,
+      reasoning: `LLM call failed: ${err instanceof Error ? err.message : String(err)}`,
+      fallbackReason: 'llm_error',
     };
   }
 }

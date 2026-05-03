@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 import path from 'node:path';
 import fs from 'node:fs/promises';
-import { EventLog } from './event-log.js';
+import { EventLog, type AppendEventInput } from './event-log.js';
 import { Scheduler } from './scheduler.js';
 import { ProposalManager } from './proposal.js';
 import { runCycle as runLifeCycle } from './life-cycle.js';
@@ -83,6 +83,7 @@ async function decideForAgent(
   agentLastProposal: Map<string, number>,
   pendingDigest: DigestEntry[],
   snapshot: CycleSnapshot,
+  appendEvent: (e: AppendEventInput) => Promise<unknown>,
 ): Promise<void> {
   agent.age += 1;
   const g = agent.genome;
@@ -117,6 +118,23 @@ async function decideForAgent(
       openBounties: snapshot.openBounties,
       topBountyReward: snapshot.topBountyReward,
     }, llmCall);
+
+    // Surface malformed LLM output to the audit trail. We still treat the
+    // decision as idle (decide() guarantees never to throw), but the event
+    // makes the failure visible instead of silently collapsing.
+    if (decision.fallbackReason) {
+      console.warn(`  ⚠️ ${agent.id} decision fallback (${decision.fallbackReason}): ${decision.reasoning}`);
+      await appendEvent({
+        type: 'decision_invalid',
+        agentId: agent.id,
+        data: {
+          cycle: cycleNum,
+          reason: decision.fallbackReason,
+          detail: decision.reasoning,
+          ...(decision.rawResponse !== undefined ? { rawResponse: decision.rawResponse } : {}),
+        },
+      });
+    }
 
     // Deduct tokens from agent balance (was previously in a detached module-level Map)
     if (cycleTokenUsage > 0) {
@@ -416,6 +434,7 @@ export class Supervisor extends EventEmitter {
     } catch { /* bounties file may not exist on first run */ }
 
     // LLM-powered decisions for each agent (parallel)
+    const appendEvent = this.eventLog.append.bind(this.eventLog);
     const results = await Promise.allSettled(
       alive.map(agent =>
         decideForAgent(
@@ -429,6 +448,7 @@ export class Supervisor extends EventEmitter {
           this.agentLastProposal,
           this.pendingDigest,
           snapshot,
+          appendEvent,
         )
       )
     );
