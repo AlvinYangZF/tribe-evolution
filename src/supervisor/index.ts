@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 import path from 'node:path';
 import fs from 'node:fs/promises';
-import { EventLog } from './event-log.js';
+import { EventLog, type AppendEventInput } from './event-log.js';
 import { Scheduler } from './scheduler.js';
 import { ProposalManager } from './proposal.js';
 import { runCycle as runLifeCycle } from './life-cycle.js';
@@ -15,6 +15,8 @@ import { classifyReply } from './email-approval.js';
 import { ensureDir, safeWriteJSON } from '../shared/filesystem.js';
 import { BountyBoard } from './bounty-board.js';
 import { Treasury } from './treasury.js';
+import { attributeBountyOutcome, evaluateSkillPromotion, verdictToDelta } from './skill-evaluator.js';
+import { readMemory, writeMemory, inheritMemory, MEMORY_LIMIT_BYTES } from './workspace.js';
 import type { AgentState, SkillName } from '../shared/types.js';
 
 const ALL_SKILL_NAMES: SkillName[] = ['web_search', 'code_write', 'data_analyze', 'artifact_write', 'observe', 'propose'];
@@ -83,33 +85,45 @@ async function decideForAgent(
   agentLastProposal: Map<string, number>,
   pendingDigest: DigestEntry[],
   snapshot: CycleSnapshot,
+  eventLog: EventLog,
+  ecosystemDir: string,
 ): Promise<void> {
+  const appendEvent = (e: AppendEventInput) => eventLog.append(e);
   agent.age += 1;
   const g = agent.genome;
 
   try {
+    // Token usage accumulates across the three decide() phases (explore +
+    // evaluate + execute), so we use += rather than = and rely on opts to
+    // size each call.
     let cycleTokenUsage = 0;
-    const llmCall = async (sys: string, userMsg: string) => {
+    const llmCall = async (
+      sys: string,
+      userMsg: string,
+      opts?: { maxTokens?: number; phase?: 'explore' | 'evaluate' | 'execute' },
+    ) => {
       const resp = await proxyCall({
-        requestId: `${agent.id}-${cycleNum}`,
+        requestId: opts?.phase ? `${agent.id}-${cycleNum}-${opts.phase}` : `${agent.id}-${cycleNum}`,
         agentId: agent.id,
         model: 'deepseek-chat',
         messages: [
           { role: 'system', content: sys },
           { role: 'user', content: userMsg },
         ],
-        maxTokens: 300,
+        maxTokens: opts?.maxTokens ?? 300,
       });
-      cycleTokenUsage = resp.tokenUsage?.total ?? 0;
+      cycleTokenUsage += resp.tokenUsage?.total ?? 0;
       return resp.content;
     };
 
+    const memory = await readMemory(ecosystemDir, agent.id);
     const decision = await decide(g, {
       balance: agent.tokenBalance,
       age: agent.age,
       reputation: agent.reputation,
       generation: agent.generation,
       gender: agent.diploidGenome?.gender,
+      memory,
     }, {
       aliveCount,
       pendingMessages: 0,
@@ -117,6 +131,24 @@ async function decideForAgent(
       openBounties: snapshot.openBounties,
       topBountyReward: snapshot.topBountyReward,
     }, llmCall);
+
+    // Surface malformed LLM output to the audit trail. We still treat the
+    // decision as idle (decide() guarantees never to throw), but the event
+    // makes the failure visible instead of silently collapsing.
+    if (decision.fallbackReason) {
+      console.warn(`  ⚠️ ${agent.id} decision fallback (${decision.fallbackReason}): ${decision.reasoning}`);
+      await appendEvent({
+        type: 'decision_invalid',
+        agentId: agent.id,
+        actorType: 'agent',
+        data: {
+          cycle: cycleNum,
+          reason: decision.fallbackReason,
+          detail: decision.reasoning,
+          ...(decision.rawResponse !== undefined ? { rawResponse: decision.rawResponse } : {}),
+        },
+      });
+    }
 
     // Deduct tokens from agent balance (was previously in a detached module-level Map)
     if (cycleTokenUsage > 0) {
@@ -132,6 +164,7 @@ async function decideForAgent(
     else if (decision.action === 'propose') score = 60;
     else if (decision.action === 'lock_resource') score = 25;
     else if (decision.action === 'trade') score = 30;
+    else if (decision.action === 'update_memory') score = 30;
     else if (decision.action === 'observe') score = 15;
 
     agent.contributionScore = score;
@@ -160,9 +193,11 @@ async function decideForAgent(
     }
 
     // When agent chooses 'develop_skill', train one of its existing skills.
-    // The bump is applied to the diploid genome (random allele) so the gain
-    // is heritable through reproduction; the haploid `genome` is then
-    // re-expressed to keep the two views in sync.
+    // The bump size is gated by the agent's recent track record on that skill
+    // (see skill-evaluator.ts): promote → full bump, hold → small bump,
+    // demote → tokens spent but no gain. The bump is applied to the diploid
+    // genome (random allele) so the gain is heritable through reproduction;
+    // the haploid `genome` is then re-expressed to keep the two views in sync.
     if (decision.action === 'develop_skill') {
       const cost = 5000;
       if (agent.tokenBalance < cost) {
@@ -174,14 +209,31 @@ async function decideForAgent(
       } else {
         agent.tokenBalance -= cost;
         const skill = ALL_SKILL_NAMES[Math.floor(Math.random() * ALL_SKILL_NAMES.length)];
+        const evaluation = await evaluateSkillPromotion(eventLog, agent.id, skill);
+        const delta = verdictToDelta(evaluation.verdict);
         const allele: 'dominant' | 'recessive' = Math.random() < 0.5 ? 'dominant' : 'recessive';
         const before = agent.diploidGenome.skills[skill][allele];
-        agent.diploidGenome.skills[skill][allele] = Math.min(1, before + 0.2);
+        const after = Math.min(1, before + delta);
+        agent.diploidGenome.skills[skill][allele] = after;
         const expressed = expressGenome(agent.diploidGenome);
         agent.genome = expressedToGenome(expressed);
-        agent.contributionScore += 20;
-        console.log(`  🔬 ${agent.id} trained ${skill} (${allele}: ${before.toFixed(2)} → ${agent.diploidGenome.skills[skill][allele].toFixed(2)})`);
+        agent.contributionScore += delta > 0 ? 20 : 5;
+        console.log(`  🔬 ${agent.id} trained ${skill} (${evaluation.verdict}, ${evaluation.sampleSize} samples, rate ${evaluation.rate.toFixed(2)}; ${allele}: ${before.toFixed(2)} → ${after.toFixed(2)})`);
         await saveAgent(agent);
+      }
+    }
+
+    // When agent chooses 'update_memory', overwrite its persistent notes.
+    // The new content is the agent's own working memory for next cycles
+    // and is inherited by offspring on reproduction.
+    if (decision.action === 'update_memory') {
+      const content = typeof decision.params?.content === 'string' ? decision.params.content : '';
+      if (content.trim().length === 0) {
+        agent.contributionScore = 10;
+      } else {
+        const written = await writeMemory(ecosystemDir, agent.id, content);
+        const truncated = Buffer.byteLength(content, 'utf-8') > MEMORY_LIMIT_BYTES;
+        console.log(`  📝 ${agent.id} updated memory (${written} bytes${truncated ? ', truncated' : ''})`);
       }
     }
 
@@ -354,7 +406,7 @@ export class Supervisor extends EventEmitter {
       }
     } catch { /* no persisted state on first run */ }
 
-    await this.eventLog.append({ type: 'agent_born', agentId: 'supervisor', data: { action: 'start', agentCount: this.agents.size } });
+    await this.eventLog.append({ type: 'agent_born', agentId: 'supervisor', actorType: 'supervisor', data: { action: 'start', agentCount: this.agents.size } });
     console.log(`✅ ${this.agents.size} agents loaded, starting cycles...`);
 
     // Sync config to ecosystem for dashboard
@@ -398,7 +450,7 @@ export class Supervisor extends EventEmitter {
   }
 
   private async runCycle(cycleNum: number): Promise<void> {
-    await this.eventLog.append({ type: 'cycle_start', agentId: 'supervisor', data: { cycle: cycleNum } });
+    await this.eventLog.append({ type: 'cycle_start', agentId: 'supervisor', actorType: 'supervisor', data: { cycle: cycleNum } });
     console.log(`\n🔄 Cycle ${cycleNum} — ${this.agents.size} agents`);
     await this.loadAgents();
 
@@ -429,6 +481,8 @@ export class Supervisor extends EventEmitter {
           this.agentLastProposal,
           this.pendingDigest,
           snapshot,
+          this.eventLog,
+          this.config.ecosystemDir,
         )
       )
     );
@@ -444,7 +498,7 @@ export class Supervisor extends EventEmitter {
     await this.processBountyExecutions(alive);
 
     for (const agent of alive) {
-      await this.eventLog.append({ type: 'task_completed', agentId: agent.id, data: { cycle: cycleNum, contribution: agent.contributionScore } });
+      await this.eventLog.append({ type: 'task_completed', agentId: agent.id, actorType: 'agent', data: { cycle: cycleNum, contribution: agent.contributionScore } });
     }
 
     // Only feed living agents into the lifecycle. Already-dead agents stay
@@ -465,13 +519,25 @@ export class Supervisor extends EventEmitter {
 
     const newBorns = evolved.filter(a => a.age <= 1 && a.generation > 0);
     for (const a of newBorns) {
-      await this.eventLog.append({ type: 'agent_born', agentId: a.id, data: { generation: a.generation, parentId: a.parentId, personaName: a.genome.personaName } });
+      await this.eventLog.append({ type: 'agent_born', agentId: a.id, actorType: 'agent', data: { generation: a.generation, parentId: a.parentId, personaName: a.genome.personaName } });
+      // Inherit memory from a random parent (or the single parent for asexual
+      // offspring). Best-effort — failure here doesn't block the cycle.
+      const parents = a.parentIds && a.parentIds.length > 0 ? a.parentIds : (a.parentId ? [a.parentId] : []);
+      if (parents.length > 0) {
+        const chosen = parents[Math.floor(Math.random() * parents.length)];
+        try {
+          await inheritMemory(this.config.ecosystemDir, chosen, a.id);
+        } catch (err: unknown) {
+          const m = err instanceof Error ? err.message : String(err);
+          console.warn(`  ⚠️ Memory inheritance failed for ${a.id}: ${m}`);
+        }
+      }
       console.log(`  🐣 New: ${a.id} (${a.genome.personaName}) gen=${a.generation}`);
     }
 
     const extinct = evolved.filter(a => !a.alive);
     for (const a of extinct) {
-      await this.eventLog.append({ type: 'agent_extinct', agentId: a.id, data: { generation: a.generation, age: a.age, fitness: a.fitness } });
+      await this.eventLog.append({ type: 'agent_extinct', agentId: a.id, actorType: 'agent', data: { generation: a.generation, age: a.age, fitness: a.fitness } });
       console.log(`  💀 Extinct: ${a.id} (${a.genome.personaName}) age=${a.age}`);
     }
 
@@ -508,7 +574,7 @@ export class Supervisor extends EventEmitter {
     const totalFitness = alive.reduce((s, a) => s + a.fitness, 0);
     const avgFitness = alive.length > 0 ? (totalFitness / alive.length).toFixed(1) : '0';
     console.log(`  📊 ${alive.length} alive, avg fitness: ${avgFitness}`);
-    await this.eventLog.append({ type: 'cycle_end', agentId: 'supervisor', data: { cycle: cycleNum, aliveCount: alive.length, avgFitness } });
+    await this.eventLog.append({ type: 'cycle_end', agentId: 'supervisor', actorType: 'supervisor', data: { cycle: cycleNum, aliveCount: alive.length, avgFitness } });
   }
 
 
@@ -543,15 +609,33 @@ export class Supervisor extends EventEmitter {
 
         // Run verification (no-op when verificationTests is empty → passes)
         const result = await this.bountyBoard.runVerification(bounty.id);
+        const append = (e: AppendEventInput) => this.eventLog.append(e);
         if (result.passed) {
           await this.bountyBoard.completeBounty(bounty.id);
           winner.tokenBalance += bounty.reward;
           await this.saveAgent(winner);
           console.log("  ✅ Bounty completed! " + winner.id + " earned " + bounty.reward + " tokens");
-          await this.eventLog.append({ type: 'task_completed', agentId: winner.id, data: { action: 'bounty_completed', bountyId: bounty.id, reward: bounty.reward } });
+          await this.eventLog.append({ type: 'task_completed', agentId: winner.id, actorType: 'agent', data: { action: 'bounty_completed', bountyId: bounty.id, reward: bounty.reward } });
+          await attributeBountyOutcome(append, {
+            agentId: winner.id,
+            bountyId: bounty.id,
+            bountyType: bounty.type,
+            outcome: 'success',
+          });
         } else {
-          await this.bountyBoard.failVerification(bounty.id);
+          // failVerification returns the bounty; when retries are exhausted it
+          // clears winningBidId and reverts to 'open' — that's the terminal
+          // failure we want to attribute. A non-terminal fail just retries.
+          const after = await this.bountyBoard.failVerification(bounty.id);
           console.log("  ❌ Bounty verification failed: " + bounty.title.slice(0,30) + " (" + result.results.join('; ').slice(0,80) + ")");
+          if (after.winningBidId === null) {
+            await attributeBountyOutcome(append, {
+              agentId: winner.id,
+              bountyId: bounty.id,
+              bountyType: bounty.type,
+              outcome: 'failure',
+            });
+          }
         }
       } catch (err: unknown) {
         const m = err instanceof Error ? err.message : String(err);
@@ -571,7 +655,7 @@ export class Supervisor extends EventEmitter {
         if (this.seenProposalIds.has(p.id)) continue;
         this.seenProposalIds.add(p.id);
         console.log(`  📩 Proposal from ${p.agentId}: "${p.title}"`);
-        await this.eventLog.append({ type: 'proposal_created', agentId: p.agentId, data: { proposalId: p.id, title: p.title } });
+        await this.eventLog.append({ type: 'proposal_created', agentId: p.agentId, actorType: 'agent', data: { proposalId: p.id, title: p.title } });
         notifyUser(nc, { agentId: p.agentId, type: p.type, title: p.title, description: p.description, tokenCost: p.tokenCost, proposalId: p.id }).catch(() => {});
       }
       const expired = await this.proposalManager.expireOldProposals();
@@ -584,7 +668,7 @@ export class Supervisor extends EventEmitter {
   async shutdown(): Promise<void> {
     this.scheduler.stop();
     if (this.started) {
-      await this.eventLog.append({ type: 'agent_extinct', agentId: 'supervisor', data: { action: 'shutdown' } });
+      await this.eventLog.append({ type: 'agent_extinct', agentId: 'supervisor', actorType: 'supervisor', data: { action: 'shutdown' } });
     }
     this.started = false;
   }
@@ -627,6 +711,7 @@ export class Supervisor extends EventEmitter {
             await this.eventLog.append({
               type: 'proposal_created',
               agentId: 'user',
+              actorType: 'user',
               data: { action: 'approved_via_email', proposalId },
             });
           } else {
@@ -635,6 +720,7 @@ export class Supervisor extends EventEmitter {
             await this.eventLog.append({
               type: 'proposal_created',
               agentId: 'user',
+              actorType: 'user',
               data: { action: 'rejected_via_email', proposalId, reason },
             });
           }

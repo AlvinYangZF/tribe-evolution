@@ -1,4 +1,4 @@
-import type { EventLogEntry, EventType } from '../shared/types.js';
+import type { ActorType, EventLogEntry, EventType } from '../shared/types.js';
 import { appendJSONL, readJSONL, sha256 } from '../shared/filesystem.js';
 import path from 'node:path';
 
@@ -7,7 +7,18 @@ const GENESIS_HASH = '0'.repeat(64);
 export interface AppendEventInput {
   type: EventType;
   agentId: string;
+  /** Optional only to remain source-compatible with callers that haven't been
+   *  migrated yet. When omitted, append() infers it from `agentId` (the magic
+   *  strings 'supervisor' / 'user' map to the matching actor type; everything
+   *  else is treated as an agent). New code should set this explicitly. */
+  actorType?: ActorType;
   data: Record<string, unknown>;
+}
+
+function inferActorType(agentId: string): ActorType {
+  if (agentId === 'supervisor') return 'supervisor';
+  if (agentId === 'user') return 'user';
+  return 'agent';
 }
 
 export class EventLog {
@@ -47,23 +58,29 @@ export class EventLog {
     const { hash: prevHash, count } = await this.getTail();
     const index = count;
     const timestamp = Date.now();
+    const actorType: ActorType = event.actorType ?? inferActorType(event.agentId);
 
     const entry: EventLogEntry = {
       index,
       timestamp,
       type: event.type,
       agentId: event.agentId,
+      actorType,
       data: event.data,
       prevHash,
       hash: '', // placeholder
     };
 
-    // Compute hash over all fields except hash itself
+    // Compute hash over all fields except hash itself. `actorType` is included
+    // in the payload so it participates in new-entry hashes; old on-disk
+    // entries lack the field, and `JSON.stringify` omits undefined keys, so
+    // their legacy payload shape is reproduced byte-for-byte during verify().
     const hashPayload = JSON.stringify({
       index: entry.index,
       timestamp: entry.timestamp,
       type: entry.type,
       agentId: entry.agentId,
+      actorType: entry.actorType,
       data: entry.data,
       prevHash: entry.prevHash,
     });
@@ -97,12 +114,15 @@ export class EventLog {
     for (let i = 0; i < entries.length; i++) {
       const entry = entries[i];
 
-      // Recompute hash
+      // Recompute hash. We pass actorType through unconditionally — old
+      // entries on disk lack the field, so `entry.actorType` is undefined,
+      // which JSON.stringify omits, reproducing the legacy payload shape.
       const hashPayload = JSON.stringify({
         index: entry.index,
         timestamp: entry.timestamp,
         type: entry.type,
         agentId: entry.agentId,
+        actorType: entry.actorType,
         data: entry.data,
         prevHash: entry.prevHash,
       });

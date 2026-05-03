@@ -556,4 +556,57 @@ describe('Dashboard Server', () => {
       expect(res.status).toBe(404);
     });
   });
+
+  describe('GET /api/events cycle filter', () => {
+    // Seed cycle_start markers and intra-cycle events into the existing log
+    // so we can exercise the time-travel filter. Existing events from
+    // seedEvents() get cycle === null (no preceding cycle_start) and are
+    // filtered out by fromCycle/toCycle.
+    let cycleSeeded = false;
+    async function ensureCycleSeed() {
+      if (cycleSeeded) return;
+      const eventLog = new EventLog(TMP_DIR);
+      await eventLog.append({ type: 'cycle_start', agentId: 'supervisor', actorType: 'supervisor', data: { cycle: 5 } });
+      await eventLog.append({ type: 'task_completed', agentId: 'agent_001', actorType: 'agent', data: { in: 'cycle 5' } });
+      await eventLog.append({ type: 'cycle_end', agentId: 'supervisor', actorType: 'supervisor', data: { cycle: 5 } });
+      await eventLog.append({ type: 'cycle_start', agentId: 'supervisor', actorType: 'supervisor', data: { cycle: 6 } });
+      await eventLog.append({ type: 'task_completed', agentId: 'agent_002', actorType: 'agent', data: { in: 'cycle 6' } });
+      await eventLog.append({ type: 'cycle_start', agentId: 'supervisor', actorType: 'supervisor', data: { cycle: 7 } });
+      await eventLog.append({ type: 'task_completed', agentId: 'agent_003', actorType: 'agent', data: { in: 'cycle 7' } });
+      cycleSeeded = true;
+    }
+
+    it('annotates each event with the cycle inferred from cycle_start markers', async () => {
+      await ensureCycleSeed();
+      const res = await authedFetch(`${baseUrl}/api/events?limit=200`);
+      expect(res.status).toBe(200);
+      const events = await res.json() as Array<{ type: string; cycle: number | null; data: { in?: string } }>;
+      const inCycle5 = events.find(e => e.data?.in === 'cycle 5');
+      const inCycle6 = events.find(e => e.data?.in === 'cycle 6');
+      const inCycle7 = events.find(e => e.data?.in === 'cycle 7');
+      expect(inCycle5?.cycle).toBe(5);
+      expect(inCycle6?.cycle).toBe(6);
+      expect(inCycle7?.cycle).toBe(7);
+    });
+
+    it('filters events to those with cycle ≥ fromCycle and ≤ toCycle', async () => {
+      await ensureCycleSeed();
+      const res = await authedFetch(`${baseUrl}/api/events?limit=200&fromCycle=6&toCycle=6`);
+      const events = await res.json() as Array<{ type: string; cycle: number | null }>;
+      // Only cycle_start(6), task_completed(in=cycle 6) — but NOT cycle_start(7)
+      // because that one's cycle === 7 (the marker assigns the new cycle to itself).
+      const cycles = events.map(e => e.cycle);
+      expect(cycles.every(c => c === 6)).toBe(true);
+      expect(events.length).toBe(2);
+    });
+
+    it('GET /api/events/cycle-range returns the observed min and max', async () => {
+      await ensureCycleSeed();
+      const res = await authedFetch(`${baseUrl}/api/events/cycle-range`);
+      expect(res.status).toBe(200);
+      const body = await res.json() as { minCycle: number | null; maxCycle: number | null };
+      expect(body.minCycle).toBe(5);
+      expect(body.maxCycle).toBe(7);
+    });
+  });
 });

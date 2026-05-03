@@ -64,6 +64,26 @@ describe('EventLog', () => {
       expect(parsed.index).toBe(0);
       expect(parsed.type).toBe('agent_born');
     });
+
+    it('should infer actorType from agentId when not provided', async () => {
+      const e1 = await log.append({ type: 'agent_born', agentId: 'a1', data: {} });
+      const e2 = await log.append({ type: 'cycle_start', agentId: 'supervisor', data: {} });
+      const e3 = await log.append({ type: 'proposal_created', agentId: 'user', data: {} });
+      expect(e1.actorType).toBe('agent');
+      expect(e2.actorType).toBe('supervisor');
+      expect(e3.actorType).toBe('user');
+    });
+
+    it('should respect explicit actorType over inference', async () => {
+      // Real-world example: a system-attributed event with a non-magic id.
+      const e = await log.append({
+        type: 'token_allocated',
+        agentId: 'system-bootstrap',
+        actorType: 'supervisor',
+        data: { amount: 1000 },
+      });
+      expect(e.actorType).toBe('supervisor');
+    });
   });
 
   describe('replay', () => {
@@ -143,6 +163,53 @@ describe('EventLog', () => {
     });
 
     it('should return true for empty log (0 entries)', async () => {
+      expect(await log.verify()).toBe(true);
+    });
+
+    it('should still verify legacy entries that lack actorType', async () => {
+      // Simulate an event written before actorType existed: we hand-craft a
+      // JSONL line whose hash was computed over the legacy payload shape.
+      // verify() must accept it because JSON.stringify omits undefined keys,
+      // reproducing the original payload byte-for-byte.
+      const { sha256 } = await import('../../src/shared/filesystem.js');
+      const legacy = {
+        index: 0,
+        timestamp: 1700000000000,
+        type: 'agent_born' as const,
+        agentId: 'a1',
+        data: { name: 'Alice' },
+        prevHash: '0'.repeat(64),
+      };
+      const legacyHash = sha256(JSON.stringify(legacy));
+      const entry = { ...legacy, hash: legacyHash };
+      await fs.writeFile(LOG_PATH, JSON.stringify(entry) + '\n', 'utf-8');
+
+      expect(await log.verify()).toBe(true);
+    });
+
+    it('should chain new actor-typed entries on top of legacy entries', async () => {
+      // Same legacy seed as above, then append a new entry with actorType
+      // and confirm the chain is intact.
+      const { sha256 } = await import('../../src/shared/filesystem.js');
+      const legacy = {
+        index: 0,
+        timestamp: 1700000000000,
+        type: 'agent_born' as const,
+        agentId: 'a1',
+        data: { name: 'Alice' },
+        prevHash: '0'.repeat(64),
+      };
+      const legacyHash = sha256(JSON.stringify(legacy));
+      await fs.writeFile(LOG_PATH, JSON.stringify({ ...legacy, hash: legacyHash }) + '\n', 'utf-8');
+
+      const fresh = await log.append({
+        type: 'cycle_start',
+        agentId: 'supervisor',
+        actorType: 'supervisor',
+        data: { cycle: 1 },
+      });
+      expect(fresh.prevHash).toBe(legacyHash);
+      expect(fresh.actorType).toBe('supervisor');
       expect(await log.verify()).toBe(true);
     });
   });

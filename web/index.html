@@ -976,7 +976,15 @@ if (!sessionStorage.getItem('tribe_token')) { location.href = 'login.html'; }
           <option value="agent_born">agent_born</option>
           <option value="agent_extinct">agent_extinct</option>
           <option value="mutation">mutation</option>
+          <option value="decision_invalid">decision_invalid</option>
+          <option value="skill_attributed">skill_attributed</option>
         </select>
+        <input id="event-from-cycle" type="number" min="0" placeholder="from C" title="From cycle (inclusive)"
+               onchange="applyEventFilter()" style="width:6em;font-size:0.8rem;padding:0.15rem 0.35rem;">
+        <input id="event-to-cycle" type="number" min="0" placeholder="to C" title="To cycle (inclusive)"
+               onchange="applyEventFilter()" style="width:6em;font-size:0.8rem;padding:0.15rem 0.35rem;">
+        <button onclick="resetEventCycleFilter()" title="Clear cycle filter"
+                style="font-size:0.78rem;padding:0.15rem 0.5rem;cursor:pointer;">Now</button>
         <span style="color:var(--text-muted);font-size:0.78rem;margin-left:auto;">点击事件查看详情</span>
       </div>
       <div id="event-timeline">
@@ -1175,19 +1183,35 @@ function eventIcon(type) {
   return icons[type] || '⚪';
 }
 
+// Derive a display label from polymorphic actor fields, falling back to magic
+// strings for events written before actorType existed.
+function actorLabel(entry) {
+  const type = entry.actorType
+    || (entry.agentId === 'supervisor' ? 'supervisor'
+      : entry.agentId === 'user' ? 'user'
+      : 'agent');
+  if (type === 'supervisor') return { icon: '🧠', name: 'Supervisor' };
+  if (type === 'user') return { icon: '👤', name: 'User' };
+  return { icon: '🤖', name: `Agent <strong>${entry.agentId}</strong>` };
+}
+
 function eventMsg(entry) {
-  const { type, agentId, data } = entry;
+  const { type } = entry;
+  const a = actorLabel(entry);
   switch (type) {
-    case 'agent_born': return `Agent <strong>${agentId}</strong> was born`;
-    case 'agent_extinct': return `Agent <strong>${agentId}</strong> went extinct`;
-    case 'task_completed': return `Agent <strong>${agentId}</strong> completed a task`;
-    case 'resource_locked': return `Agent <strong>${agentId}</strong> locked a resource`;
-    case 'resource_released': return `Agent <strong>${agentId}</strong> released a resource`;
-    case 'deal_kept': return `Agent <strong>${agentId}</strong> kept a deal`;
-    case 'deal_broken': return `Agent <strong>${agentId}</strong> broke a deal`;
-    case 'token_allocated': return `Agent <strong>${agentId}</strong> received tokens`;
-    case 'mutation': return `Agent <strong>${agentId}</strong> mutated`;
-    default: return `Agent <strong>${agentId}</strong> — ${type}`;
+    case 'agent_born': return `${a.icon} ${a.name} was born`;
+    case 'agent_extinct': return `${a.icon} ${a.name} went extinct`;
+    case 'task_completed': return `${a.icon} ${a.name} completed a task`;
+    case 'resource_locked': return `${a.icon} ${a.name} locked a resource`;
+    case 'resource_released': return `${a.icon} ${a.name} released a resource`;
+    case 'deal_kept': return `${a.icon} ${a.name} kept a deal`;
+    case 'deal_broken': return `${a.icon} ${a.name} broke a deal`;
+    case 'token_allocated': return `${a.icon} ${a.name} received tokens`;
+    case 'mutation': return `${a.icon} ${a.name} mutated`;
+    case 'cycle_start': return `${a.icon} ${a.name} started a cycle`;
+    case 'cycle_end': return `${a.icon} ${a.name} ended a cycle`;
+    case 'decision_invalid': return `${a.icon} ${a.name} produced a malformed decision`;
+    default: return `${a.icon} ${a.name} — ${type}`;
   }
 }
 
@@ -1486,13 +1510,26 @@ let allEvents = [];
 
 async function applyEventFilter() {
   const filter = document.getElementById('event-type-filter').value;
+  const fromCycleEl = document.getElementById('event-from-cycle');
+  const toCycleEl = document.getElementById('event-to-cycle');
+  const params = new URLSearchParams({ limit: '100', offset: '0', type: filter });
+  if (fromCycleEl && fromCycleEl.value !== '') params.set('fromCycle', fromCycleEl.value);
+  if (toCycleEl && toCycleEl.value !== '') params.set('toCycle', toCycleEl.value);
   try {
-    const res = await authFetch(`/api/events?limit=100&offset=0&type=${filter}`);
+    const res = await authFetch(`/api/events?${params.toString()}`);
     const events = await res.json();
     renderEvents(events);
   } catch (err) {
     console.error('Filter failed:', err);
   }
+}
+
+function resetEventCycleFilter() {
+  const fromEl = document.getElementById('event-from-cycle');
+  const toEl = document.getElementById('event-to-cycle');
+  if (fromEl) fromEl.value = '';
+  if (toEl) toEl.value = '';
+  applyEventFilter();
 }
 
 // ── Event Timeline ──
@@ -1506,6 +1543,7 @@ function renderEvents(events) {
   const html = events.slice(0, 80).map(e => `
     <div class="event-entry event-type-${e.type}" onclick="openEventDetail(${e.index})" style="cursor:pointer;">
       <span class="event-time">${fmtTime(e.timestamp)}</span>
+      ${typeof e.cycle === 'number' ? `<span class="event-cycle" style="font-size:0.7rem;color:var(--text-muted);">C${e.cycle}</span>` : ''}
       <span class="event-icon">${eventIcon(e.type)}</span>
       <span class="event-msg">${eventMsg(e)}</span>
     </div>
