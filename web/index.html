@@ -1260,16 +1260,27 @@ const fitChart = new Chart(fitCtx, {
 
 const popCtx = document.getElementById('population-chart').getContext('2d');
 const popChart = new Chart(popCtx, {
-  type: 'bar',
-  data: { labels: ['Population'], datasets: [{ label: 'Alive', data: [0], backgroundColor: '#39d353' }] },
+  type: 'line',
+  data: { labels: [], datasets: [{
+    label: 'Population',
+    data: [],
+    borderColor: '#39d353',
+    backgroundColor: 'rgba(57, 211, 83, 0.12)',
+    tension: 0.3,
+    pointRadius: 2,
+    fill: true,
+  }] },
   options: {
     responsive: true,
     maintainAspectRatio: false,
     color: '#8b949e',
-    plugins: { legend: { display: false } },
+    plugins: {
+      legend: { position: 'top', labels: { boxWidth: 8, color: '#8b949e' } },
+      title: { display: true, text: 'Population over cycles', color: '#8b949e', font: { size: 12 } },
+    },
     scales: {
-      x: { grid: { display: false }, ticks: { color: '#6e7681' } },
-      y: { beginAtZero: true, ticks: { color: '#6e7681', stepSize: 1 }, grid: { color: '#21262d' } },
+      x: { ticks: { color: '#6e7681', maxTicksLimit: 8 }, grid: { color: '#21262d' } },
+      y: { beginAtZero: true, ticks: { color: '#6e7681', stepSize: 1, precision: 0 }, grid: { color: '#21262d' } },
     },
   },
 });
@@ -1362,8 +1373,17 @@ function updateDashboard(data) {
     fitChart.update();
   }
 
-  // Population chart
-  popChart.data.datasets[0].data = [stats.populationSize ?? 0];
+  // Population over cycles. Append the live count so the line keeps
+  // updating between full snapshots; otherwise fall back to the historical
+  // series the server replayed from cycle_end events.
+  const popHistory = stats.populationHistory || [];
+  if (popHistory.length > 0) {
+    popChart.data.labels = popHistory.map(p => `C${p.cycle}`);
+    popChart.data.datasets[0].data = popHistory.map(p => p.count);
+  } else {
+    popChart.data.labels = ['now'];
+    popChart.data.datasets[0].data = [stats.populationSize ?? 0];
+  }
   popChart.update();
 
   // Trait chart

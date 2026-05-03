@@ -113,6 +113,7 @@ describe('Dashboard Server', () => {
       expect(body).toHaveProperty('populationSize');
       expect(body).toHaveProperty('generationRange');
       expect(body).toHaveProperty('fitnessHistory');
+      expect(body).toHaveProperty('populationHistory');
     });
 
     it('GET /api/config returns system configuration', async () => {
