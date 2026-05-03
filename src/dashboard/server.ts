@@ -161,15 +161,61 @@ const agentsDir = path.join(ecosystemDir, 'agents');
     return all;
   }
 
-  async function loadEvents(limit: number = 50, offset: number = 0, type?: string): Promise<EventLogEntry[]> {
+  /**
+   * Walk events in chain order and stamp each with the cycle it belongs to.
+   * Cycles are inferred from `cycle_start` markers — every event that follows
+   * a `cycle_start` until the next one is attributed to that cycle. Events
+   * before the first `cycle_start` get `cycle: null`. Useful for the
+   * dashboard's time-travel filter, since most event types don't carry a
+   * cycle field in their `data`.
+   */
+  function annotateEventsWithCycle(events: EventLogEntry[]): Array<EventLogEntry & { cycle: number | null }> {
+    let current: number | null = null;
+    return events.map(e => {
+      if (e.type === 'cycle_start') {
+        const c = (e.data as { cycle?: unknown })?.cycle;
+        if (typeof c === 'number') current = c;
+      }
+      return { ...e, cycle: current };
+    });
+  }
+
+  async function loadEvents(
+    limit: number = 50,
+    offset: number = 0,
+    type?: string,
+    fromCycle?: number,
+    toCycle?: number,
+  ): Promise<Array<EventLogEntry & { cycle: number | null }>> {
     const all = await loadAllEvents();
-    let filtered = all;
+    const annotated = annotateEventsWithCycle(all);
+    let filtered = annotated;
     if (type && type !== 'all') {
-      filtered = all.filter(e => e.type === type);
+      filtered = filtered.filter(e => e.type === type);
+    }
+    if (typeof fromCycle === 'number') {
+      filtered = filtered.filter(e => e.cycle !== null && e.cycle >= fromCycle);
+    }
+    if (typeof toCycle === 'number') {
+      filtered = filtered.filter(e => e.cycle !== null && e.cycle <= toCycle);
     }
     // Reverse chronological order
     const reversed = filtered.reverse();
     return reversed.slice(offset, offset + limit);
+  }
+
+  async function loadCycleRange(): Promise<{ minCycle: number | null; maxCycle: number | null }> {
+    const all = await loadAllEvents();
+    let min: number | null = null;
+    let max: number | null = null;
+    for (const e of all) {
+      if (e.type !== 'cycle_start') continue;
+      const c = (e.data as { cycle?: unknown })?.cycle;
+      if (typeof c !== 'number') continue;
+      if (min === null || c < min) min = c;
+      if (max === null || c > max) max = c;
+    }
+    return { minCycle: min, maxCycle: max };
   }
 
   async function loadEventById(idStr: string): Promise<{ event: EventLogEntry; relatedEvents: EventLogEntry[] } | null> {
@@ -421,9 +467,26 @@ const agentsDir = path.join(ecosystemDir, 'agents');
         const limit = parseInt(url.searchParams.get('limit') || '50', 10);
         const offset = parseInt(url.searchParams.get('offset') || '0', 10);
         const type = url.searchParams.get('type') || 'all';
-        const events = await loadEvents(limit, offset, type);
+        const fromCycleRaw = url.searchParams.get('fromCycle');
+        const toCycleRaw = url.searchParams.get('toCycle');
+        const fromCycle = fromCycleRaw !== null && fromCycleRaw !== '' ? parseInt(fromCycleRaw, 10) : undefined;
+        const toCycle = toCycleRaw !== null && toCycleRaw !== '' ? parseInt(toCycleRaw, 10) : undefined;
+        const events = await loadEvents(
+          limit,
+          offset,
+          type,
+          Number.isFinite(fromCycle) ? fromCycle : undefined,
+          Number.isFinite(toCycle) ? toCycle : undefined,
+        );
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(events));
+        return;
+      }
+
+      if (pathname === '/api/events/cycle-range' && req.method === 'GET') {
+        const range = await loadCycleRange();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(range));
         return;
       }
 
