@@ -353,3 +353,155 @@ describe('decide (integration-style with mock LLM)', () => {
     expect(capturedUser.length).toBeGreaterThan(0);
   });
 });
+
+describe('three-phase decide pipeline', () => {
+  // Mock the LLM to dispatch on the phase tag the orchestrator passes in opts.
+  // The orchestrator calls explore → evaluate → execute in order; the mock
+  // returns a phase-specific JSON shape for each.
+  function phaseAwareMock(responses: { explore: string; evaluate: string; execute: string }) {
+    const calls: Array<{ phase?: string; user: string }> = [];
+    const mock = async (
+      _sys: string,
+      user: string,
+      opts?: { phase?: 'explore' | 'evaluate' | 'execute'; maxTokens?: number },
+    ): Promise<string> => {
+      calls.push({ phase: opts?.phase, user });
+      if (opts?.phase === 'explore') return responses.explore;
+      if (opts?.phase === 'evaluate') return responses.evaluate;
+      return responses.execute;
+    };
+    return { mock, calls };
+  }
+
+  it('runs explore → evaluate → execute in order with the right phase tags', async () => {
+    const { decide } = await import('../../src/agent/brain.js');
+    const { mock, calls } = phaseAwareMock({
+      explore: JSON.stringify({ observations: ['low tokens', '3 open bounties'], focus_area: 'earn tokens' }),
+      evaluate: JSON.stringify({
+        candidates: [
+          { action: 'bid_bounty', why: 'fastest path to tokens', expected_value: 70 },
+          { action: 'idle', why: 'safe', expected_value: 5 },
+        ],
+        top_choice: 'bid_bounty',
+      }),
+      execute: JSON.stringify({ action: 'bid_bounty', params: { bountyId: 'b1' }, reasoning: 'going for it' }),
+    });
+
+    const result = await decide(makeGenome(), makeState(), makeEnv(), mock);
+    expect(calls.map(c => c.phase)).toEqual(['explore', 'evaluate', 'execute']);
+    expect(result.action).toBe('bid_bounty');
+    expect(result.params).toEqual({ bountyId: 'b1' });
+  });
+
+  it('forwards explore observations into the evaluate user message', async () => {
+    const { decide } = await import('../../src/agent/brain.js');
+    const { mock, calls } = phaseAwareMock({
+      explore: JSON.stringify({ observations: ['I am old (age 47)'], focus_area: 'survive' }),
+      evaluate: JSON.stringify({ candidates: [], top_choice: null }),
+      execute: JSON.stringify({ action: 'idle', params: {}, reasoning: 'rest' }),
+    });
+
+    await decide(makeGenome(), makeState(), makeEnv(), mock);
+    const evalCall = calls.find(c => c.phase === 'evaluate');
+    expect(evalCall?.user).toContain('I am old (age 47)');
+    expect(evalCall?.user).toContain('survive');
+  });
+
+  it('still produces a decision when explore output is malformed (degrades gracefully)', async () => {
+    const { decide } = await import('../../src/agent/brain.js');
+    const { mock } = phaseAwareMock({
+      explore: 'garbage',
+      evaluate: JSON.stringify({ candidates: [], top_choice: null }),
+      execute: JSON.stringify({ action: 'observe', params: {}, reasoning: 'fallback' }),
+    });
+
+    const result = await decide(makeGenome(), makeState(), makeEnv(), mock);
+    expect(result.action).toBe('observe');
+    expect(result.fallbackReason).toBeUndefined();
+  });
+
+  it('still produces a decision when evaluate output is malformed', async () => {
+    const { decide } = await import('../../src/agent/brain.js');
+    const { mock } = phaseAwareMock({
+      explore: JSON.stringify({ observations: [], focus_area: '' }),
+      evaluate: '{not valid',
+      execute: JSON.stringify({ action: 'web_search', params: { query: 'x' }, reasoning: 'go' }),
+    });
+
+    const result = await decide(makeGenome(), makeState(), makeEnv(), mock);
+    expect(result.action).toBe('web_search');
+  });
+
+  it('falls back to idle with json_parse when the execute phase output is malformed', async () => {
+    const { decide } = await import('../../src/agent/brain.js');
+    const { mock } = phaseAwareMock({
+      explore: JSON.stringify({ observations: [], focus_area: '' }),
+      evaluate: JSON.stringify({ candidates: [], top_choice: null }),
+      execute: 'not valid execute output',
+    });
+
+    const result = await decide(makeGenome(), makeState(), makeEnv(), mock);
+    expect(result.action).toBe('idle');
+    expect(result.fallbackReason).toBe('json_parse');
+  });
+
+  it('passes phase-specific maxTokens to the LLM (300 / 100 / 600)', async () => {
+    const { decide } = await import('../../src/agent/brain.js');
+    const captured: Array<{ phase?: string; maxTokens?: number }> = [];
+    const mock = async (
+      _sys: string,
+      _user: string,
+      opts?: { phase?: 'explore' | 'evaluate' | 'execute'; maxTokens?: number },
+    ): Promise<string> => {
+      captured.push({ phase: opts?.phase, maxTokens: opts?.maxTokens });
+      return JSON.stringify({ action: 'idle', params: {}, reasoning: '' });
+    };
+
+    await decide(makeGenome(), makeState(), makeEnv(), mock);
+    expect(captured).toEqual([
+      { phase: 'explore', maxTokens: 300 },
+      { phase: 'evaluate', maxTokens: 100 },
+      { phase: 'execute', maxTokens: 600 },
+    ]);
+  });
+});
+
+describe('parseExplore / parseEvaluate', () => {
+  it('parseExplore accepts a valid response', async () => {
+    const { parseExplore } = await import('../../src/agent/brain.js');
+    const r = parseExplore(JSON.stringify({ observations: ['x', 'y'], focus_area: 'z' }));
+    expect(r).toEqual({ observations: ['x', 'y'], focus_area: 'z' });
+  });
+
+  it('parseExplore returns null on garbage', async () => {
+    const { parseExplore } = await import('../../src/agent/brain.js');
+    expect(parseExplore('not json')).toBeNull();
+    expect(parseExplore('')).toBeNull();
+    expect(parseExplore(JSON.stringify({ wrong: 'shape' }))).toBeNull();
+  });
+
+  it('parseEvaluate accepts a response with candidates and a top_choice', async () => {
+    const { parseEvaluate } = await import('../../src/agent/brain.js');
+    const r = parseEvaluate(JSON.stringify({
+      candidates: [{ action: 'idle', why: 'safe', expected_value: 1 }],
+      top_choice: 'idle',
+    }));
+    expect(r?.top_choice).toBe('idle');
+    expect(r?.candidates).toHaveLength(1);
+  });
+
+  it('parseEvaluate accepts a null top_choice', async () => {
+    const { parseEvaluate } = await import('../../src/agent/brain.js');
+    const r = parseEvaluate(JSON.stringify({ candidates: [], top_choice: null }));
+    expect(r?.top_choice).toBeNull();
+  });
+
+  it('parseEvaluate rejects an invalid action enum', async () => {
+    const { parseEvaluate } = await import('../../src/agent/brain.js');
+    const r = parseEvaluate(JSON.stringify({
+      candidates: [{ action: 'fly_to_moon', why: '', expected_value: 0 }],
+      top_choice: null,
+    }));
+    expect(r).toBeNull();
+  });
+});

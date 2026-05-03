@@ -266,30 +266,146 @@ export function parseDecision(llmResponse: string): AgentDecision {
   };
 }
 
+// ─── Three-phase decision pipeline ──────────────────────────────────────────
+
+/** Phase 1 output: what the agent observes about its situation. */
+export interface ExploreOutput {
+  observations: string[];
+  focus_area: string;
+}
+
+/** Phase 2 output: weighed alternatives + a leading pick. */
+export interface EvaluateOutput {
+  candidates: Array<{ action: DecisionAction; why: string; expected_value: number }>;
+  top_choice: DecisionAction | null;
+}
+
+const ExploreSchema = z.object({
+  observations: z.array(z.string()).max(10),
+  focus_area: z.string(),
+});
+
+const EvaluateSchema = z.object({
+  candidates: z.array(z.object({
+    action: z.enum(ALL_DECISION_ACTIONS as [DecisionAction, ...DecisionAction[]]),
+    why: z.string(),
+    expected_value: z.number(),
+  })).max(8),
+  top_choice: z.enum(ALL_DECISION_ACTIONS as [DecisionAction, ...DecisionAction[]]).nullable(),
+});
+
+function safeJsonParse(s: string): unknown | null {
+  try { return JSON.parse(s.trim()); } catch { return null; }
+}
+
+/** Parse an explore-phase response. Returns null on any failure — the
+ *  pipeline degrades gracefully to an empty observation set. */
+export function parseExplore(raw: string): ExploreOutput | null {
+  if (!raw || raw.trim().length === 0) return null;
+  const obj = safeJsonParse(raw);
+  if (obj === null) return null;
+  const parsed = ExploreSchema.safeParse(obj);
+  return parsed.success ? parsed.data : null;
+}
+
+/** Parse an evaluate-phase response. Returns null on any failure. */
+export function parseEvaluate(raw: string): EvaluateOutput | null {
+  if (!raw || raw.trim().length === 0) return null;
+  const obj = safeJsonParse(raw);
+  if (obj === null) return null;
+  const parsed = EvaluateSchema.safeParse(obj);
+  return parsed.success ? parsed.data : null;
+}
+
+const EXPLORE_PROMPT = `OBSERVE phase. Look at your state, memory, the ecosystem, and any open bounties. List up to 5 short observations and pick the most important focus_area for this cycle.
+
+Output JSON ONLY:
+{"observations": ["...", "..."], "focus_area": "..."}`;
+
+function evaluatePromptFor(explore: ExploreOutput | null): string {
+  const obsBlock = explore && explore.observations.length > 0
+    ? `Observations from your explore phase:\n${explore.observations.map(o => `- ${o}`).join('\n')}\nFocus area: ${explore.focus_area}\n\n`
+    : 'No observations carried over from explore.\n\n';
+  return `${obsBlock}EVALUATE phase. Consider up to 5 candidate actions you could take this cycle. For each, give a one-sentence reason and a numeric expected_value (rough utility, can be negative). Then choose the single top_choice.
+
+Output JSON ONLY:
+{"candidates": [{"action": "...", "why": "...", "expected_value": 0}], "top_choice": "..."}`;
+}
+
+function executePromptFor(explore: ExploreOutput | null, evaluate: EvaluateOutput | null): string {
+  const evalBlock = evaluate && evaluate.candidates.length > 0
+    ? `Your evaluation:\n${evaluate.candidates.map(c => `- ${c.action} (EV=${c.expected_value}): ${c.why}`).join('\n')}\nLeading choice: ${evaluate.top_choice ?? '(unset)'}\n\n`
+    : '';
+  const focusLine = explore?.focus_area ? `Your focus area: ${explore.focus_area}\n\n` : '';
+  return `${focusLine}${evalBlock}EXECUTE phase. Commit to exactly ONE action and produce its concrete params. You may override the leading choice if you reconsider.
+
+Output JSON ONLY:
+{"action": "...", "params": {...}, "reasoning": "..."}`;
+}
+
 // ─── Orchestrator ───────────────────────────────────────────────────────────
 
+/** Token caps per phase. wanman's 30/10/60 split applied to a 1000-token
+ *  total budget. The supervisor passes these through to proxyCall. */
+const PHASE_BUDGETS = { explore: 300, evaluate: 100, execute: 600 } as const;
+
+export type CallLLM = (
+  systemPrompt: string,
+  userMessage: string,
+  opts?: { maxTokens?: number; phase?: 'explore' | 'evaluate' | 'execute' },
+) => Promise<string>;
+
 /**
- * The main decision loop for an agent.
+ * The main decision loop for an agent. Runs as three sequential LLM calls:
+ *   explore  → gather observations
+ *   evaluate → weigh up to 5 actions
+ *   execute  → commit to one action (same shape as legacy decide())
  *
- * @param genome   The agent's genome (personality, skills, etc.)
- * @param state    The agent's current state (balance, age, reputation, generation)
- * @param environment  Current ecosystem snapshot
- * @param callLLM  A function that sends a system+user prompt to an LLM and returns the response text
- * @returns        A structured AgentDecision
+ * Failures in explore or evaluate degrade gracefully — the pipeline
+ * continues with empty/null phase output. Only execute-phase failures
+ * (or thrown LLM errors) collapse the whole decision to idle. The public
+ * AgentDecision shape is preserved.
  */
 export async function decide(
   genome: Genome,
   state: AgentStateForBrain,
   environment: AgentEnvironmentForBrain,
-  callLLM: (systemPrompt: string, userMessage: string) => Promise<string>,
+  callLLM: CallLLM,
 ): Promise<AgentDecision> {
   const systemPrompt = compileAgentPrompt(genome, state, environment);
 
-  const userMessage = `当前循环决策，请根据你的人格特征、技能和生态信息，选择最合适的行动并输出 JSON。`;
-
+  // Phase 1: explore
+  let explore: ExploreOutput | null = null;
   try {
-    const llmResponse = await callLLM(systemPrompt, userMessage);
-    return parseDecision(llmResponse);
+    const raw = await callLLM(systemPrompt, EXPLORE_PROMPT, { maxTokens: PHASE_BUDGETS.explore, phase: 'explore' });
+    explore = parseExplore(raw);
+  } catch (err) {
+    return {
+      action: 'idle',
+      params: {},
+      reasoning: `LLM call failed: ${err instanceof Error ? err.message : String(err)}`,
+      fallbackReason: 'llm_error',
+    };
+  }
+
+  // Phase 2: evaluate
+  let evaluate: EvaluateOutput | null = null;
+  try {
+    const raw = await callLLM(systemPrompt, evaluatePromptFor(explore), { maxTokens: PHASE_BUDGETS.evaluate, phase: 'evaluate' });
+    evaluate = parseEvaluate(raw);
+  } catch (err) {
+    return {
+      action: 'idle',
+      params: {},
+      reasoning: `LLM call failed: ${err instanceof Error ? err.message : String(err)}`,
+      fallbackReason: 'llm_error',
+    };
+  }
+
+  // Phase 3: execute — collapses to idle on any failure (preserved by parseDecision)
+  try {
+    const raw = await callLLM(systemPrompt, executePromptFor(explore, evaluate), { maxTokens: PHASE_BUDGETS.execute, phase: 'execute' });
+    return parseDecision(raw);
   } catch (err) {
     return {
       action: 'idle',

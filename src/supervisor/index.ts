@@ -93,19 +93,26 @@ async function decideForAgent(
   const g = agent.genome;
 
   try {
+    // Token usage accumulates across the three decide() phases (explore +
+    // evaluate + execute), so we use += rather than = and rely on opts to
+    // size each call.
     let cycleTokenUsage = 0;
-    const llmCall = async (sys: string, userMsg: string) => {
+    const llmCall = async (
+      sys: string,
+      userMsg: string,
+      opts?: { maxTokens?: number; phase?: 'explore' | 'evaluate' | 'execute' },
+    ) => {
       const resp = await proxyCall({
-        requestId: `${agent.id}-${cycleNum}`,
+        requestId: opts?.phase ? `${agent.id}-${cycleNum}-${opts.phase}` : `${agent.id}-${cycleNum}`,
         agentId: agent.id,
         model: 'deepseek-chat',
         messages: [
           { role: 'system', content: sys },
           { role: 'user', content: userMsg },
         ],
-        maxTokens: 300,
+        maxTokens: opts?.maxTokens ?? 300,
       });
-      cycleTokenUsage = resp.tokenUsage?.total ?? 0;
+      cycleTokenUsage += resp.tokenUsage?.total ?? 0;
       return resp.content;
     };
 
