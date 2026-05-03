@@ -15,6 +15,7 @@ import { classifyReply } from './email-approval.js';
 import { ensureDir, safeWriteJSON } from '../shared/filesystem.js';
 import { BountyBoard } from './bounty-board.js';
 import { Treasury } from './treasury.js';
+import { attributeBountyOutcome, evaluateSkillPromotion, verdictToDelta } from './skill-evaluator.js';
 import type { AgentState, SkillName } from '../shared/types.js';
 
 const ALL_SKILL_NAMES: SkillName[] = ['web_search', 'code_write', 'data_analyze', 'artifact_write', 'observe', 'propose'];
@@ -83,8 +84,9 @@ async function decideForAgent(
   agentLastProposal: Map<string, number>,
   pendingDigest: DigestEntry[],
   snapshot: CycleSnapshot,
-  appendEvent: (e: AppendEventInput) => Promise<unknown>,
+  eventLog: EventLog,
 ): Promise<void> {
+  const appendEvent = (e: AppendEventInput) => eventLog.append(e);
   agent.age += 1;
   const g = agent.genome;
 
@@ -179,9 +181,11 @@ async function decideForAgent(
     }
 
     // When agent chooses 'develop_skill', train one of its existing skills.
-    // The bump is applied to the diploid genome (random allele) so the gain
-    // is heritable through reproduction; the haploid `genome` is then
-    // re-expressed to keep the two views in sync.
+    // The bump size is gated by the agent's recent track record on that skill
+    // (see skill-evaluator.ts): promote → full bump, hold → small bump,
+    // demote → tokens spent but no gain. The bump is applied to the diploid
+    // genome (random allele) so the gain is heritable through reproduction;
+    // the haploid `genome` is then re-expressed to keep the two views in sync.
     if (decision.action === 'develop_skill') {
       const cost = 5000;
       if (agent.tokenBalance < cost) {
@@ -193,13 +197,16 @@ async function decideForAgent(
       } else {
         agent.tokenBalance -= cost;
         const skill = ALL_SKILL_NAMES[Math.floor(Math.random() * ALL_SKILL_NAMES.length)];
+        const evaluation = await evaluateSkillPromotion(eventLog, agent.id, skill);
+        const delta = verdictToDelta(evaluation.verdict);
         const allele: 'dominant' | 'recessive' = Math.random() < 0.5 ? 'dominant' : 'recessive';
         const before = agent.diploidGenome.skills[skill][allele];
-        agent.diploidGenome.skills[skill][allele] = Math.min(1, before + 0.2);
+        const after = Math.min(1, before + delta);
+        agent.diploidGenome.skills[skill][allele] = after;
         const expressed = expressGenome(agent.diploidGenome);
         agent.genome = expressedToGenome(expressed);
-        agent.contributionScore += 20;
-        console.log(`  🔬 ${agent.id} trained ${skill} (${allele}: ${before.toFixed(2)} → ${agent.diploidGenome.skills[skill][allele].toFixed(2)})`);
+        agent.contributionScore += delta > 0 ? 20 : 5;
+        console.log(`  🔬 ${agent.id} trained ${skill} (${evaluation.verdict}, ${evaluation.sampleSize} samples, rate ${evaluation.rate.toFixed(2)}; ${allele}: ${before.toFixed(2)} → ${after.toFixed(2)})`);
         await saveAgent(agent);
       }
     }
@@ -435,7 +442,6 @@ export class Supervisor extends EventEmitter {
     } catch { /* bounties file may not exist on first run */ }
 
     // LLM-powered decisions for each agent (parallel)
-    const appendEvent = this.eventLog.append.bind(this.eventLog);
     const results = await Promise.allSettled(
       alive.map(agent =>
         decideForAgent(
@@ -449,7 +455,7 @@ export class Supervisor extends EventEmitter {
           this.agentLastProposal,
           this.pendingDigest,
           snapshot,
-          appendEvent,
+          this.eventLog,
         )
       )
     );
@@ -564,15 +570,33 @@ export class Supervisor extends EventEmitter {
 
         // Run verification (no-op when verificationTests is empty → passes)
         const result = await this.bountyBoard.runVerification(bounty.id);
+        const append = (e: AppendEventInput) => this.eventLog.append(e);
         if (result.passed) {
           await this.bountyBoard.completeBounty(bounty.id);
           winner.tokenBalance += bounty.reward;
           await this.saveAgent(winner);
           console.log("  ✅ Bounty completed! " + winner.id + " earned " + bounty.reward + " tokens");
           await this.eventLog.append({ type: 'task_completed', agentId: winner.id, actorType: 'agent', data: { action: 'bounty_completed', bountyId: bounty.id, reward: bounty.reward } });
+          await attributeBountyOutcome(append, {
+            agentId: winner.id,
+            bountyId: bounty.id,
+            bountyType: bounty.type,
+            outcome: 'success',
+          });
         } else {
-          await this.bountyBoard.failVerification(bounty.id);
+          // failVerification returns the bounty; when retries are exhausted it
+          // clears winningBidId and reverts to 'open' — that's the terminal
+          // failure we want to attribute. A non-terminal fail just retries.
+          const after = await this.bountyBoard.failVerification(bounty.id);
           console.log("  ❌ Bounty verification failed: " + bounty.title.slice(0,30) + " (" + result.results.join('; ').slice(0,80) + ")");
+          if (after.winningBidId === null) {
+            await attributeBountyOutcome(append, {
+              agentId: winner.id,
+              bountyId: bounty.id,
+              bountyType: bounty.type,
+              outcome: 'failure',
+            });
+          }
         }
       } catch (err: unknown) {
         const m = err instanceof Error ? err.message : String(err);
