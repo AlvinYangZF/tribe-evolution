@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { TokenLedger } from '../../src/supervisor/token-ledger.js';
+import { TokenLedger, flushAndSave } from '../../src/supervisor/token-ledger.js';
 
 describe('TokenLedger', () => {
   it('starts at zero usage and zero pending delta', () => {
@@ -85,5 +85,78 @@ describe('TokenLedger', () => {
     // The ledger ensures pendingDelta exposes it.
     expect(ledger.pendingDelta()).toBe(200);
     expect(ledger.settle()).toBe(200);
+  });
+});
+
+describe('flushAndSave', () => {
+  it('debits the agent balance and advances the watermark on a successful save', async () => {
+    const ledger = new TokenLedger();
+    ledger.recordUsage(150);
+    const agent = { tokenBalance: 1000 };
+    const saveCalls: Array<{ tokenBalance: number }> = [];
+    const save = async (a: { tokenBalance: number }) => { saveCalls.push({ ...a }); };
+
+    await flushAndSave(ledger, agent, save);
+    expect(agent.tokenBalance).toBe(850);
+    expect(saveCalls).toHaveLength(1);
+    expect(saveCalls[0].tokenBalance).toBe(850);
+    expect(ledger.pendingDelta()).toBe(0);
+  });
+
+  it('clamps the balance at zero when the debit exceeds available tokens', async () => {
+    const ledger = new TokenLedger();
+    ledger.recordUsage(900);
+    const agent = { tokenBalance: 100 };
+    const save = async () => { /* succeed */ };
+    await flushAndSave(ledger, agent, save);
+    expect(agent.tokenBalance).toBe(0);
+    expect(ledger.pendingDelta()).toBe(0);
+  });
+
+  it('is a no-op when there is no pending usage (no save call)', async () => {
+    const ledger = new TokenLedger();
+    const agent = { tokenBalance: 1000 };
+    let saveCalled = false;
+    const save = async () => { saveCalled = true; };
+    await flushAndSave(ledger, agent, save);
+    expect(agent.tokenBalance).toBe(1000);
+    expect(saveCalled).toBe(false);
+  });
+
+  it('rolls back the in-memory balance and leaves the watermark untouched when save throws', async () => {
+    const ledger = new TokenLedger();
+    ledger.recordUsage(150);
+    const agent = { tokenBalance: 1000 };
+    const save = async () => { throw new Error('disk full'); };
+
+    await expect(flushAndSave(ledger, agent, save)).rejects.toThrow('disk full');
+    // Balance restored.
+    expect(agent.tokenBalance).toBe(1000);
+    // Watermark NOT advanced — a retry should still see the same delta.
+    expect(ledger.pendingDelta()).toBe(150);
+  });
+
+  it('a successful retry after a failure charges exactly once', async () => {
+    // Regression test for the PR #21 TODO: previously the watermark
+    // advanced before the save, so after a save throw the balance was
+    // already debited in-memory and a retry would skip the redo. With
+    // flushAndSave, retry is safe and idempotent.
+    const ledger = new TokenLedger();
+    ledger.recordUsage(150);
+    const agent = { tokenBalance: 1000 };
+    let calls = 0;
+    const save = async () => {
+      calls += 1;
+      if (calls === 1) throw new Error('transient');
+    };
+
+    await expect(flushAndSave(ledger, agent, save)).rejects.toThrow('transient');
+    expect(agent.tokenBalance).toBe(1000);
+    expect(ledger.pendingDelta()).toBe(150);
+
+    await flushAndSave(ledger, agent, save);
+    expect(agent.tokenBalance).toBe(850);
+    expect(ledger.pendingDelta()).toBe(0);
+    expect(calls).toBe(2);
   });
 });

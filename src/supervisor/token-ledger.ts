@@ -52,3 +52,38 @@ export class TokenLedger {
     return delta;
   }
 }
+
+/**
+ * Transactional debit-and-persist for an agent's token balance.
+ *
+ * Closes the TODO from PR #21's review: the previous flushTokenUsage()
+ * closure debited the in-memory balance and advanced the watermark
+ * BEFORE calling save(), so a save throw left in-memory and on-disk
+ * out of sync and a (hypothetical) retry skipped the redo.
+ *
+ * Order of operations here:
+ *   1. Read pendingDelta. If 0, no save is attempted and we return.
+ *   2. Snapshot the current balance.
+ *   3. Apply the debit to the in-memory balance.
+ *   4. Call save(). On success: settle the ledger.
+ *   5. On save throw: restore the snapshotted balance and re-throw,
+ *      leaving the watermark untouched so the next flush retries the
+ *      same delta.
+ */
+export async function flushAndSave<A extends { tokenBalance: number }>(
+  ledger: TokenLedger,
+  agent: A,
+  save: (a: A) => Promise<void>,
+): Promise<void> {
+  const delta = ledger.pendingDelta();
+  if (delta <= 0) return;
+  const snapshotBalance = agent.tokenBalance;
+  agent.tokenBalance = Math.max(0, agent.tokenBalance - delta);
+  try {
+    await save(agent);
+    ledger.settle();
+  } catch (err) {
+    agent.tokenBalance = snapshotBalance;
+    throw err;
+  }
+}
