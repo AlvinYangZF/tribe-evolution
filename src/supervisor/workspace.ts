@@ -93,6 +93,25 @@ export async function readLastDecision(ecosystemDir: string, agentId: string): P
 }
 
 /**
+ * Recursively delete an agent's workspace directory. Called when an agent
+ * dies — their notes and last-decision snapshot have no further use to
+ * anyone (the agent file itself stays on disk with alive=false for the
+ * lineage view, and the event log retains the audit trail). Best-effort:
+ * a missing directory or any other filesystem error is swallowed and
+ * returned to the caller as `false`, never thrown — workspace hygiene
+ * must not block the cycle.
+ */
+export async function removeWorkspace(ecosystemDir: string, agentId: string): Promise<boolean> {
+  const dir = workspaceDir(ecosystemDir, agentId);
+  try {
+    await fs.rm(dir, { recursive: true, force: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Read an agent's notes.md, or '' if the file does not exist yet. Errors
  * other than ENOENT propagate so we don't silently mask filesystem problems.
  */

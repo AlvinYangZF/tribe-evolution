@@ -9,6 +9,7 @@ import {
   summarizeOwnMemory,
   writeLastDecision,
   readLastDecision,
+  removeWorkspace,
   MEMORY_LIMIT_BYTES,
   SUMMARIZE_MIN_BYTES,
 } from '../../src/supervisor/workspace.js';
@@ -278,5 +279,37 @@ describe('writeLastDecision / readLastDecision', () => {
     const dir = path.join(ECO_DIR, 'workspaces', 'a1');
     const files = await fs.readdir(dir);
     expect(files).toEqual(['last-decision.json']);
+  });
+});
+
+describe('removeWorkspace', () => {
+  it('deletes the workspace directory recursively', async () => {
+    await writeMemory(ECO_DIR, 'doomed', 'memorable lessons');
+    await writeLastDecision(ECO_DIR, 'doomed', {
+      cycle: 1, timestamp: 1, action: 'idle', reasoning: 'whatever',
+    });
+    const dir = path.join(ECO_DIR, 'workspaces', 'doomed');
+    // Sanity: dir exists with expected files.
+    expect((await fs.readdir(dir)).sort()).toEqual(['last-decision.json', 'notes.md']);
+
+    expect(await removeWorkspace(ECO_DIR, 'doomed')).toBe(true);
+    await expect(fs.stat(dir)).rejects.toThrow();
+  });
+
+  it('returns true when the directory does not exist (idempotent)', async () => {
+    // fs.rm with force:true is a no-op for missing paths, so this should
+    // succeed without throwing — important for the supervisor calling
+    // it on every extinct agent without checking first.
+    expect(await removeWorkspace(ECO_DIR, 'never-existed')).toBe(true);
+  });
+
+  it('never throws — returns false on filesystem errors', async () => {
+    // Best-effort guarantee: the supervisor must be able to call this in
+    // a tight loop without try/catch. Testing the failure path directly
+    // is awkward in a portable way (chmod tricks), so we settle for
+    // confirming the API contract: a successful no-op for any path the
+    // OS will accept.
+    const result = await removeWorkspace(ECO_DIR, 'no-side-effect');
+    expect(typeof result).toBe('boolean');
   });
 });

@@ -219,7 +219,12 @@ export function reproduce(ranked: RankedAgent[], count: number): AgentState[] {
       // parentIds is the full pair for sexual reproduction.
       parentId: femaleParent.id,
       parentIds: [femaleParent.id, maleParent.id],
-      tokenBalance: 100,
+      // 2000 tokens is enough for ~1-2 LLM cycles plus a first bounty
+      // bid attempt (the bid_bounty handler in supervisor enforces a
+      // 1000-token minimum). The previous 100-token seed left newborns
+      // unable to do anything productive — see the newborn-trap fix in
+      // PR #24.
+      tokenBalance: 2000,
       contributionScore: 0,
       reputation: 0.5,
       dealsKept: 0,
@@ -275,7 +280,9 @@ function reproduceAsexual(ranked: RankedAgent[], count: number): AgentState[] {
       generation: 0,
       parentId: parent.id,
       parentIds: [parent.id],
-      tokenBalance: 100,
+      // Same 2000-token seed as sexual offspring. See reproduce() above
+      // for rationale.
+      tokenBalance: 2000,
       contributionScore: 0,
       reputation: 0.5,
       dealsKept: 0,

@@ -15,12 +15,24 @@ import { classifyReply } from './email-approval.js';
 import { ensureDir, safeWriteJSON } from '../shared/filesystem.js';
 import { BountyBoard } from './bounty-board.js';
 import { Treasury } from './treasury.js';
-import { TokenLedger } from './token-ledger.js';
+import { TokenLedger, flushAndSave } from './token-ledger.js';
 import { attributeBountyOutcome, evaluateSkillPromotion, verdictToDelta } from './skill-evaluator.js';
-import { readMemory, writeMemory, inheritMemory, summarizeOwnMemory, writeLastDecision, MEMORY_LIMIT_BYTES, type Summarizer } from './workspace.js';
+import { readMemory, writeMemory, inheritMemory, summarizeOwnMemory, writeLastDecision, removeWorkspace, MEMORY_LIMIT_BYTES, type Summarizer } from './workspace.js';
 import type { AgentState, SkillName } from '../shared/types.js';
 
 const ALL_SKILL_NAMES: SkillName[] = ['web_search', 'code_write', 'data_analyze', 'artifact_write', 'observe', 'propose'];
+
+/**
+ * Floor at which the three-phase decide() pipeline is skipped for an
+ * agent. Below this many tokens an agent typically can't afford even a
+ * single cycle's worth of LLM calls (PHASE_BUDGETS sum to 1000 output
+ * tokens, plus input prompt tokens), so spending what they have left on
+ * thinking is throwing good money after bad. We take the agent through
+ * the cycle as a synthetic idle (still ages, still gets a last-decision
+ * snapshot) but never call the LLM. Tunable; conservative starting
+ * point at half a fresh agent's seed allocation.
+ */
+const CHEAP_DECIDE_THRESHOLD = 500;
 
 type DigestEntry = { id: string; agentId: string; title: string; status: string };
 
@@ -93,6 +105,33 @@ async function decideForAgent(
   agent.age += 1;
   const g = agent.genome;
 
+  // Cheap-decide fast path: skip the three-phase LLM pipeline entirely
+  // for agents whose token balance can't sustain a single cycle. Still
+  // counts as a cycle (age was incremented above; a synthetic
+  // last-decision snapshot is written so the dashboard sees the agent),
+  // but no LLM call is made. Action handlers don't run either, since
+  // every meaningful action is itself token-cost-gated.
+  //
+  // BYPASS while protectionRounds > 0: newborns are seeded with enough
+  // tokens (2000) to think for a couple cycles plus attempt a first bid,
+  // but if they over-spend or pick token-burning actions they could fall
+  // below the threshold during their grace window. Protected agents
+  // always get to think — otherwise they have no path out of the
+  // newborn trap (see life-cycle.ts:reproduce).
+  if (agent.protectionRounds === 0 && agent.tokenBalance < CHEAP_DECIDE_THRESHOLD) {
+    agent.contributionScore = 5;
+    try {
+      await writeLastDecision(ecosystemDir, agent.id, {
+        cycle: cycleNum,
+        timestamp: Date.now(),
+        action: 'idle',
+        reasoning: `Skipped LLM: insufficient balance (${agent.tokenBalance} < ${CHEAP_DECIDE_THRESHOLD})`,
+      });
+    } catch { /* best-effort */ }
+    console.log(`  💸 ${agent.id} insufficient balance (${agent.tokenBalance}) — skipping LLM`);
+    return;
+  }
+
   try {
     // Token bookkeeping: every LLM call this cycle (the three decide()
     // phases plus any action handler that calls llmCall, e.g.
@@ -118,19 +157,10 @@ async function decideForAgent(
       ledger.recordUsage(resp.tokenUsage?.total ?? 0);
       return resp.content;
     };
-    const flushTokenUsage = async () => {
-      const delta = ledger.settle();
-      if (delta > 0) {
-        agent.tokenBalance = Math.max(0, agent.tokenBalance - delta);
-        // TODO: this isn't transactional — if saveAgent throws, the
-        // in-memory balance has already been debited but the on-disk
-        // copy hasn't. The watermark is also already advanced, so a
-        // retry would re-debit nothing on disk. A proper fix would
-        // snapshot the balance, save first, and roll back the ledger
-        // on failure. Pre-existing shape from PR #20; out of scope here.
-        await saveAgent(agent);
-      }
-    };
+    // Transactional debit + save: rolls back the in-memory balance and
+    // leaves the watermark untouched if save() throws, so on-disk and
+    // in-memory state stay in sync. See flushAndSave() in token-ledger.ts.
+    const flushTokenUsage = () => flushAndSave(ledger, agent, saveAgent);
 
     const memory = await readMemory(ecosystemDir, agent.id);
     const decision = await decide(g, {
@@ -627,6 +657,11 @@ export class Supervisor extends EventEmitter {
     const extinct = evolved.filter(a => !a.alive);
     for (const a of extinct) {
       await this.eventLog.append({ type: 'agent_extinct', agentId: a.id, actorType: 'agent', data: { generation: a.generation, age: a.age, fitness: a.fitness } });
+      // Workspace hygiene: notes.md and last-decision.json have no use
+      // once the agent is dead. The agent file itself stays on disk
+      // (alive=false) for the lineage view, and the event log retains
+      // the audit trail. removeWorkspace is best-effort and never throws.
+      await removeWorkspace(this.config.ecosystemDir, a.id);
       console.log(`  💀 Extinct: ${a.id} (${a.genome.personaName}) age=${a.age}`);
     }
 
