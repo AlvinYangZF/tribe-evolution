@@ -150,11 +150,22 @@ async function decideForAgent(
       });
     }
 
-    // Deduct tokens from agent balance (was previously in a detached module-level Map)
-    if (cycleTokenUsage > 0) {
-      agent.tokenBalance = Math.max(0, agent.tokenBalance - cycleTokenUsage);
-      await saveAgent(agent);
-    }
+    // Token bookkeeping: action handlers below are allowed to make additional
+    // LLM calls (e.g. summarize_memory uses the agent's own llmCall closure),
+    // and each call increments cycleTokenUsage. We track a watermark of how
+    // much has already been deducted so flushTokenUsage() only charges the
+    // delta — preventing both double-billing and (the previous bug) free LLM
+    // calls for action-handler usage that happened after the initial debit.
+    let lastDeductedTokens = 0;
+    const flushTokenUsage = async () => {
+      const delta = cycleTokenUsage - lastDeductedTokens;
+      if (delta > 0) {
+        agent.tokenBalance = Math.max(0, agent.tokenBalance - delta);
+        lastDeductedTokens = cycleTokenUsage;
+        await saveAgent(agent);
+      }
+    };
+    await flushTokenUsage();
 
     let score = 10;
     if (decision.action === 'bid_bounty') score = 70;
@@ -239,10 +250,11 @@ async function decideForAgent(
     }
 
     // When agent chooses 'summarize_memory', compact its own notes via the
-    // LLM. The agent pays the LLM cost from its own balance through the
-    // shared llmCall closure (cycleTokenUsage accumulates and is debited
-    // at end of cycle). No-ops on empty / too-short notes / LLM failure
-    // are logged but don't error.
+    // LLM. The agent pays the LLM cost from its own balance: agentSummarizer
+    // routes through the shared llmCall closure (so cycleTokenUsage grows),
+    // and flushTokenUsage() debits the new delta after the action completes.
+    // No-ops on empty / too-short notes / LLM failure are logged but don't
+    // error.
     if (decision.action === 'summarize_memory') {
       const agentSummarizer: Summarizer = async (text, maxBytes) => {
         const sys = `Compact your own working notes for use in future cycles. Keep only the most actionable lessons — what reliably worked, what didn't, who to trust, what to bid on. Output the new notes only — no preamble, no JSON, no headers. Aim for ${maxBytes} bytes or fewer.`;
@@ -252,6 +264,9 @@ async function decideForAgent(
         return out;
       };
       const result = await summarizeOwnMemory(ecosystemDir, agent.id, agentSummarizer);
+      // Charge the agent for the compaction LLM call (no-op when the
+      // helper short-circuited before calling the summarizer).
+      await flushTokenUsage();
       if (result.summarized) {
         console.log(`  📝 ${agent.id} compacted memory (${result.beforeBytes} → ${result.afterBytes} bytes)`);
       } else {
