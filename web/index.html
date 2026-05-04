@@ -1606,6 +1606,8 @@ document.getElementById('event-modal').addEventListener('click', (e) => {
 });
 
 // ── Agent Detail Modal ──
+let agentSkillChartInstance = null;
+
 async function openAgentDetail(agentId) {
   const titleEl = document.getElementById('agent-modal-title');
   const bodyEl = document.getElementById('agent-modal-body');
@@ -1614,29 +1616,38 @@ async function openAgentDetail(agentId) {
   bodyEl.innerHTML = '<p style="color:var(--text-muted)">Loading…</p>';
   overlay.classList.add('active');
 
-  const [agentRes, decisionRes] = await Promise.allSettled([
+  const [agentRes, decisionRes, skillRes] = await Promise.allSettled([
     authFetch(`/api/agents/${encodeURIComponent(agentId)}`).then(r => r.ok ? r.json() : null),
     authFetch(`/api/agents/${encodeURIComponent(agentId)}/last-decision`).then(r => r.ok ? r.json() : null),
+    authFetch(`/api/agents/${encodeURIComponent(agentId)}/skill-timeline`).then(r => r.ok ? r.json() : []),
   ]);
   const agent = agentRes.status === 'fulfilled' ? agentRes.value : null;
   const decision = decisionRes.status === 'fulfilled' ? decisionRes.value : null;
+  const skillTimeline = skillRes.status === 'fulfilled' ? skillRes.value : [];
 
   if (!agent && !decision) {
     bodyEl.innerHTML = '<p style="color:var(--red)">Failed to load agent</p>';
     return;
   }
-  bodyEl.innerHTML = renderAgentDetail(agent, decision);
+  bodyEl.innerHTML = renderAgentDetail(agent, decision, skillTimeline);
+  // Mount the chart only after the canvas is in the DOM.
+  if (agentSkillChartInstance) { agentSkillChartInstance.destroy(); agentSkillChartInstance = null; }
+  const canvas = document.getElementById('agent-skill-chart');
+  if (canvas && Array.isArray(skillTimeline) && skillTimeline.length > 0) {
+    agentSkillChartInstance = buildAgentSkillChart(canvas, skillTimeline);
+  }
 }
 
 function closeAgentModal() {
   document.getElementById('agent-modal').classList.remove('active');
+  if (agentSkillChartInstance) { agentSkillChartInstance.destroy(); agentSkillChartInstance = null; }
 }
 
 document.getElementById('agent-modal').addEventListener('click', (e) => {
   if (e.target === e.currentTarget) closeAgentModal();
 });
 
-function renderAgentDetail(agent, decision) {
+function renderAgentDetail(agent, decision, skillTimeline) {
   const id = agent?.id || '(unknown)';
   const persona = agent?.genome?.personaName || 'unknown';
   const gender = agent?.diploidGenome?.gender || agent?.gender || '—';
@@ -1693,7 +1704,72 @@ function renderAgentDetail(agent, decision) {
     `;
   }
 
-  return header + skillsHtml + decisionHtml;
+  // Per-agent skill timeline chart, only rendered when there are
+  // attributions for this agent (otherwise it'd be a permanently
+  // empty canvas wasting modal real estate).
+  const hasSkillData = Array.isArray(skillTimeline) && skillTimeline.some(s =>
+    Object.values(s.skills || {}).some(v => v.sampleSize > 0));
+  const skillChartHtml = hasSkillData ? `
+    <div class="modal-section-title">📈 Skill learning curve</div>
+    <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:0.3rem;">
+      Rolling success rate (last 10 attributions) per skill, snapshotted at each cycle_end.
+    </div>
+    <div style="height:200px;"><canvas id="agent-skill-chart"></canvas></div>
+  ` : `
+    <div class="modal-section-title">📈 Skill learning curve</div>
+    <p style="color:var(--text-muted);font-size:0.82rem;">No skill_attributed events for this agent yet — they need to win or definitively fail a bounty before a learning curve can plot.</p>
+  `;
+
+  return header + skillsHtml + decisionHtml + skillChartHtml;
+}
+
+function buildAgentSkillChart(canvas, timeline) {
+  const labels = timeline.map(s => `C${s.cycle}`);
+  const skills = Object.keys(SKILL_COLORS);
+  const datasets = skills.map(skill => {
+    const data = timeline.map(s => (s.skills[skill]?.rate ?? null));
+    const sampleSizes = timeline.map(s => s.skills[skill]?.sampleSize ?? 0);
+    return {
+      label: skill,
+      data,
+      sampleSizes,
+      borderColor: SKILL_COLORS[skill],
+      backgroundColor: SKILL_COLORS[skill] + '22',
+      tension: 0.25,
+      spanGaps: true,
+      pointRadius: 2,
+    };
+  }).filter(d => d.data.some(v => v !== null));
+  return new Chart(canvas.getContext('2d'), {
+    type: 'line',
+    data: { labels, datasets },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      color: '#8b949e',
+      plugins: {
+        legend: { position: 'top', labels: { boxWidth: 8, color: '#8b949e', font: { size: 10 } } },
+        tooltip: {
+          callbacks: {
+            label: (ctx) => {
+              const meta = ctx.dataset.sampleSizes && ctx.dataset.sampleSizes[ctx.dataIndex];
+              const rate = (ctx.parsed.y * 100).toFixed(0);
+              return meta !== undefined
+                ? `${ctx.dataset.label}: ${rate}% (n=${meta})`
+                : `${ctx.dataset.label}: ${rate}%`;
+            },
+          },
+        },
+      },
+      scales: {
+        x: { ticks: { color: '#6e7681', maxTicksLimit: 8 }, grid: { color: '#21262d' } },
+        y: {
+          beginAtZero: true, max: 1,
+          ticks: { color: '#6e7681', callback: (v) => `${(v * 100).toFixed(0)}%` },
+          grid: { color: '#21262d' },
+        },
+      },
+    },
+  });
 }
 
 function renderPhaseExplore(explore) {

@@ -711,5 +711,27 @@ describe('Dashboard Server', () => {
       // After bob's two failures, the last 2 outcomes are [failure, failure] → rate 0
       expect(c11!.skills.code_write).toEqual({ rate: 0, sampleSize: 2 });
     });
+
+    it('GET /api/agents/:id/skill-timeline filters to that agent only', async () => {
+      // Reuses the same seed: alice has 2 successes on code_write and
+      // 1 success on web_search. bob has 2 failures on code_write.
+      await ensureTimelineSeed();
+      const res = await authedFetch(`${baseUrl}/api/agents/alice/skill-timeline`);
+      expect(res.status).toBe(200);
+      const body = await res.json() as Array<{ cycle: number; skills: Record<string, { rate: number; sampleSize: number }> }>;
+
+      // Only alice's outcomes should be in the rolling window — bob's two
+      // failures must NOT show up here.
+      const cycles = body.map(s => s.cycle);
+      const c10 = body.find(s => s.cycle === 10);
+      const c11 = body.find(s => s.cycle === 11);
+
+      // Cycle 10: alice has 2 successes on code_write
+      expect(c10?.skills.code_write).toEqual({ rate: 1, sampleSize: 2 });
+      // Cycle 11: still 2/2 on code_write (bob's failures excluded), and
+      // alice picked up web_search.
+      expect(c11?.skills.code_write).toEqual({ rate: 1, sampleSize: 2 });
+      expect(c11?.skills.web_search).toEqual({ rate: 1, sampleSize: 1 });
+    });
   });
 });

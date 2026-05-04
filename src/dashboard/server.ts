@@ -242,19 +242,18 @@ const agentsDir = path.join(ecosystemDir, 'agents');
   }
 
   /**
-   * Population-wide skill performance over time.
+   * Skill performance over time as a per-cycle rolling-rate timeline.
    *
    * Walks the event log, maintains one rolling window of the last N
-   * skill_attributed outcomes per skill (mixing all agents), and snapshots
-   * the per-skill success rate at every cycle_end marker. The result lets
-   * the dashboard render one line per skill showing whether the population
-   * is collectively getting better or worse at that skill across cycles.
-   *
-   * Per-agent breakdown is left as a follow-up; the population-wide signal
-   * is the one that's directly interpretable as "is evolution working?".
+   * `skill_attributed` outcomes per skill, and snapshots the per-skill
+   * success rate at every `cycle_end` marker. With no `agentId`, the
+   * window mixes all agents — the population-wide "is evolution working?"
+   * view. With an `agentId`, only that agent's attributions enter the
+   * window — the per-agent learning curve used by the agent detail modal.
    */
   async function loadSkillTimeline(
     windowSize: number = 10,
+    agentId?: string,
   ): Promise<Array<{ cycle: number; skills: Record<string, { rate: number; sampleSize: number }> }>> {
     const all = await loadAllEvents();
     const window: Record<string, Array<'success' | 'failure'>> = {};
@@ -266,6 +265,7 @@ const agentsDir = path.join(ecosystemDir, 'agents');
         const c = (e.data as { cycle?: unknown })?.cycle;
         if (typeof c === 'number') currentCycle = c;
       } else if (e.type === 'skill_attributed') {
+        if (agentId && e.agentId !== agentId) continue;
         const data = e.data as { skill?: unknown; outcome?: unknown };
         if (typeof data.skill !== 'string') continue;
         if (data.outcome !== 'success' && data.outcome !== 'failure') continue;
@@ -544,6 +544,24 @@ const agentsDir = path.join(ecosystemDir, 'agents');
         }
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(snapshot));
+        return;
+      }
+
+      // Per-agent skill timeline — same shape as /api/skills/timeline but
+      // filtered to a single agent's skill_attributed events, so the
+      // agent detail modal can render a learning curve specific to them.
+      if (pathname.startsWith('/api/agents/') && pathname.endsWith('/skill-timeline') && req.method === 'GET') {
+        const agentId = pathname.slice('/api/agents/'.length, -'/skill-timeline'.length);
+        if (!agentId) {
+          res.writeHead(400);
+          res.end(JSON.stringify({ error: 'Missing agent ID' }));
+          return;
+        }
+        const windowRaw = url.searchParams.get('window');
+        const windowSize = windowRaw && Number.isFinite(parseInt(windowRaw, 10)) ? parseInt(windowRaw, 10) : 10;
+        const timeline = await loadSkillTimeline(windowSize, agentId);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(timeline));
         return;
       }
 
