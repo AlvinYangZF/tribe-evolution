@@ -472,6 +472,64 @@ describe('three-phase decide pipeline', () => {
       { phase: 'execute', maxTokens: 600 },
     ]);
   });
+
+  it('exposes phase outputs on the returned AgentDecision when all phases parse', async () => {
+    const { decide } = await import('../../src/agent/brain.js');
+    const explore = { observations: ['low tokens', 'open bounty'], focus_area: 'earn' };
+    const evaluate = {
+      candidates: [{ action: 'bid_bounty', why: 'fastest', expected_value: 70 }],
+      top_choice: 'bid_bounty',
+    };
+    const { mock } = phaseAwareMock({
+      explore: JSON.stringify(explore),
+      evaluate: JSON.stringify(evaluate),
+      execute: JSON.stringify({ action: 'bid_bounty', params: { bountyId: 'b1' }, reasoning: 'go' }),
+    });
+
+    const result = await decide(makeGenome(), makeState(), makeEnv(), mock);
+    expect(result.action).toBe('bid_bounty');
+    expect(result.phases?.explore).toEqual(explore);
+    expect(result.phases?.evaluate).toEqual(evaluate);
+  });
+
+  it('preserves phase outputs even when execute parsing fails (fallback to idle)', async () => {
+    const { decide } = await import('../../src/agent/brain.js');
+    const explore = { observations: ['noisy'], focus_area: 'survive' };
+    const { mock } = phaseAwareMock({
+      explore: JSON.stringify(explore),
+      evaluate: JSON.stringify({ candidates: [], top_choice: null }),
+      execute: 'totally not JSON',
+    });
+
+    const result = await decide(makeGenome(), makeState(), makeEnv(), mock);
+    expect(result.action).toBe('idle');
+    expect(result.fallbackReason).toBe('json_parse');
+    // Operator can still see what the agent observed even though execute failed.
+    expect(result.phases?.explore).toEqual(explore);
+    expect(result.phases?.evaluate?.top_choice).toBeNull();
+  });
+
+  it('captures partial phase state when an LLM call throws mid-pipeline', async () => {
+    const { decide } = await import('../../src/agent/brain.js');
+    const explore = { observations: ['something'], focus_area: 'thinking' };
+    let call = 0;
+    const mock = async (
+      _sys: string,
+      _user: string,
+      _opts?: { phase?: 'explore' | 'evaluate' | 'execute'; maxTokens?: number },
+    ): Promise<string> => {
+      call += 1;
+      if (call === 1) return JSON.stringify(explore);
+      throw new Error('LLM down');
+    };
+
+    const result = await decide(makeGenome(), makeState(), makeEnv(), mock);
+    expect(result.action).toBe('idle');
+    expect(result.fallbackReason).toBe('llm_error');
+    // explore captured before the throw, evaluate is null (phase never returned).
+    expect(result.phases?.explore).toEqual(explore);
+    expect(result.phases?.evaluate).toBeNull();
+  });
 });
 
 describe('parseExplore / parseEvaluate', () => {

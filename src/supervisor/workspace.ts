@@ -13,10 +13,11 @@
 
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
-import { ensureDir } from '../shared/filesystem.js';
+import { ensureDir, safeReadJSON, safeWriteJSON } from '../shared/filesystem.js';
 
 const WORKSPACES_DIR = 'workspaces';
 const NOTES_FILE = 'notes.md';
+const LAST_DECISION_FILE = 'last-decision.json';
 
 /** Soft cap on agent notes. Longer payloads are truncated on write. */
 export const MEMORY_LIMIT_BYTES = 4096;
@@ -44,6 +45,51 @@ function workspaceDir(ecosystemDir: string, agentId: string): string {
 
 function notesPath(ecosystemDir: string, agentId: string): string {
   return path.join(workspaceDir(ecosystemDir, agentId), NOTES_FILE);
+}
+
+function lastDecisionPath(ecosystemDir: string, agentId: string): string {
+  return path.join(workspaceDir(ecosystemDir, agentId), LAST_DECISION_FILE);
+}
+
+/**
+ * Per-agent debug snapshot of the most recent decide() result. Includes
+ * the final action plus the explore + evaluate phase outputs so an
+ * operator can see why the agent picked what it picked.
+ *
+ * Overwritten each cycle — we don't keep historical decisions on disk
+ * here. The hash-chained event log already records the final action;
+ * this file is purely a debug companion for the new three-phase pipeline.
+ */
+export interface LastDecisionSnapshot {
+  cycle: number;
+  timestamp: number;
+  action: string;
+  reasoning: string;
+  fallbackReason?: string;
+  phases?: {
+    explore?: unknown;
+    evaluate?: unknown;
+  };
+}
+
+/** Write the most recent decide() result to last-decision.json, overwriting
+ *  any previous snapshot. Routes through `safeWriteJSON` so the write is
+ *  atomic (tmp + rename) — a process crash mid-write can't leave the file
+ *  in a half-written state for the next reader. */
+export async function writeLastDecision(
+  ecosystemDir: string,
+  agentId: string,
+  snapshot: LastDecisionSnapshot,
+): Promise<void> {
+  await safeWriteJSON(lastDecisionPath(ecosystemDir, agentId), snapshot);
+}
+
+/** Read the most recent decide() snapshot, or null when the file is missing
+ *  / corrupt / unreadable. Defers to `safeReadJSON` which returns null on
+ *  any error — defensive against half-written files left by a previous
+ *  crash and against manual edits that produce invalid JSON. */
+export async function readLastDecision(ecosystemDir: string, agentId: string): Promise<LastDecisionSnapshot | null> {
+  return await safeReadJSON<LastDecisionSnapshot>(lastDecisionPath(ecosystemDir, agentId));
 }
 
 /**
