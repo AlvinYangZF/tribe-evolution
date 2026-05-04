@@ -194,6 +194,12 @@ describe('life-cycle', () => {
         expect(child.alive).toBe(true);
         expect(child.protectionRounds).toBeGreaterThanOrEqual(1);
         expect(child.age).toBe(0); // new offspring have age 0
+        // Newborn-trap fix: a 2000-token seed is enough to think for a
+        // cycle or two and attempt a first bounty bid (the supervisor
+        // gates bid_bounty at >= 1000 tokens). Below this, newborns
+        // were trapped under the cheap-decide fast path and died at
+        // protectionRounds=0 without ever taking an action.
+        expect(child.tokenBalance).toBe(2000);
       }
     });
 

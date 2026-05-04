@@ -111,7 +111,14 @@ async function decideForAgent(
   // last-decision snapshot is written so the dashboard sees the agent),
   // but no LLM call is made. Action handlers don't run either, since
   // every meaningful action is itself token-cost-gated.
-  if (agent.tokenBalance < CHEAP_DECIDE_THRESHOLD) {
+  //
+  // BYPASS while protectionRounds > 0: newborns are seeded with enough
+  // tokens (2000) to think for a couple cycles plus attempt a first bid,
+  // but if they over-spend or pick token-burning actions they could fall
+  // below the threshold during their grace window. Protected agents
+  // always get to think — otherwise they have no path out of the
+  // newborn trap (see life-cycle.ts:reproduce).
+  if (agent.protectionRounds === 0 && agent.tokenBalance < CHEAP_DECIDE_THRESHOLD) {
     agent.contributionScore = 5;
     try {
       await writeLastDecision(ecosystemDir, agent.id, {
