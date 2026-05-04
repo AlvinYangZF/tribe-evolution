@@ -16,7 +16,7 @@ import { ensureDir, safeWriteJSON } from '../shared/filesystem.js';
 import { BountyBoard } from './bounty-board.js';
 import { Treasury } from './treasury.js';
 import { attributeBountyOutcome, evaluateSkillPromotion, verdictToDelta } from './skill-evaluator.js';
-import { readMemory, writeMemory, inheritMemory, MEMORY_LIMIT_BYTES } from './workspace.js';
+import { readMemory, writeMemory, inheritMemory, summarizeOwnMemory, MEMORY_LIMIT_BYTES, type Summarizer } from './workspace.js';
 import type { AgentState, SkillName } from '../shared/types.js';
 
 const ALL_SKILL_NAMES: SkillName[] = ['web_search', 'code_write', 'data_analyze', 'artifact_write', 'observe', 'propose'];
@@ -150,11 +150,22 @@ async function decideForAgent(
       });
     }
 
-    // Deduct tokens from agent balance (was previously in a detached module-level Map)
-    if (cycleTokenUsage > 0) {
-      agent.tokenBalance = Math.max(0, agent.tokenBalance - cycleTokenUsage);
-      await saveAgent(agent);
-    }
+    // Token bookkeeping: action handlers below are allowed to make additional
+    // LLM calls (e.g. summarize_memory uses the agent's own llmCall closure),
+    // and each call increments cycleTokenUsage. We track a watermark of how
+    // much has already been deducted so flushTokenUsage() only charges the
+    // delta — preventing both double-billing and (the previous bug) free LLM
+    // calls for action-handler usage that happened after the initial debit.
+    let lastDeductedTokens = 0;
+    const flushTokenUsage = async () => {
+      const delta = cycleTokenUsage - lastDeductedTokens;
+      if (delta > 0) {
+        agent.tokenBalance = Math.max(0, agent.tokenBalance - delta);
+        lastDeductedTokens = cycleTokenUsage;
+        await saveAgent(agent);
+      }
+    };
+    await flushTokenUsage();
 
     let score = 10;
     if (decision.action === 'bid_bounty') score = 70;
@@ -165,6 +176,7 @@ async function decideForAgent(
     else if (decision.action === 'lock_resource') score = 25;
     else if (decision.action === 'trade') score = 30;
     else if (decision.action === 'update_memory') score = 30;
+    else if (decision.action === 'summarize_memory') score = 25;
     else if (decision.action === 'observe') score = 15;
 
     agent.contributionScore = score;
@@ -234,6 +246,32 @@ async function decideForAgent(
         const written = await writeMemory(ecosystemDir, agent.id, content);
         const truncated = Buffer.byteLength(content, 'utf-8') > MEMORY_LIMIT_BYTES;
         console.log(`  📝 ${agent.id} updated memory (${written} bytes${truncated ? ', truncated' : ''})`);
+      }
+    }
+
+    // When agent chooses 'summarize_memory', compact its own notes via the
+    // LLM. The agent pays the LLM cost from its own balance: agentSummarizer
+    // routes through the shared llmCall closure (so cycleTokenUsage grows),
+    // and flushTokenUsage() debits the new delta after the action completes.
+    // No-ops on empty / too-short notes / LLM failure are logged but don't
+    // error.
+    if (decision.action === 'summarize_memory') {
+      const agentSummarizer: Summarizer = async (text, maxBytes) => {
+        const sys = `Compact your own working notes for use in future cycles. Keep only the most actionable lessons — what reliably worked, what didn't, who to trust, what to bid on. Output the new notes only — no preamble, no JSON, no headers. Aim for ${maxBytes} bytes or fewer.`;
+        const user = `Current notes:\n\n${text}\n\nCompacted notes:`;
+        const out = (await llmCall(sys, user, { maxTokens: 400 })).trim();
+        if (!out) throw new Error('empty summary');
+        return out;
+      };
+      const result = await summarizeOwnMemory(ecosystemDir, agent.id, agentSummarizer);
+      // Charge the agent for the compaction LLM call (no-op when the
+      // helper short-circuited before calling the summarizer).
+      await flushTokenUsage();
+      if (result.summarized) {
+        console.log(`  📝 ${agent.id} compacted memory (${result.beforeBytes} → ${result.afterBytes} bytes)`);
+      } else {
+        agent.contributionScore = 10;
+        console.log(`  📝 ${agent.id} summarize_memory no-op (${result.reason})`);
       }
     }
 
@@ -449,6 +487,33 @@ export class Supervisor extends EventEmitter {
     await safeWriteJSON(path.join(this.config.ecosystemDir, 'agents', `${agent.id}.json`), agent);
   }
 
+  /**
+   * Compact a parent agent's notes into a shorter inheritance payload via
+   * the LLM. Bound to `this` so it can be passed as a callback into
+   * `inheritMemory`. Attributed to 'supervisor' (system service) — does not
+   * debit any agent's token balance.
+   *
+   * Returns the LLM's summary on success, or throws on failure / empty
+   * output so the caller can fall back to verbatim.
+   */
+  private summarizeForInheritance: Summarizer = async (text, maxBytes) => {
+    const sys = `You compact a parent AI agent's notes into the shortest payload that preserves its most actionable lessons for a child agent. Output the summary text only — no preamble, no JSON, no headers. Aim for ${maxBytes} bytes or fewer.`;
+    const user = `Parent notes:\n\n${text}\n\nSummary:`;
+    const resp = await proxyCall({
+      requestId: `summarize-inheritance-${Date.now()}`,
+      agentId: 'supervisor',
+      model: 'deepseek-chat',
+      messages: [
+        { role: 'system', content: sys },
+        { role: 'user', content: user },
+      ],
+      maxTokens: 400,
+    });
+    const out = (resp.content ?? '').trim();
+    if (!out) throw new Error('empty summary');
+    return out;
+  };
+
   private async runCycle(cycleNum: number): Promise<void> {
     await this.eventLog.append({ type: 'cycle_start', agentId: 'supervisor', actorType: 'supervisor', data: { cycle: cycleNum } });
     console.log(`\n🔄 Cycle ${cycleNum} — ${this.agents.size} agents`);
@@ -521,12 +586,15 @@ export class Supervisor extends EventEmitter {
     for (const a of newBorns) {
       await this.eventLog.append({ type: 'agent_born', agentId: a.id, actorType: 'agent', data: { generation: a.generation, parentId: a.parentId, personaName: a.genome.personaName } });
       // Inherit memory from a random parent (or the single parent for asexual
-      // offspring). Best-effort — failure here doesn't block the cycle.
+      // offspring). The summarizer compacts long parent notes via the LLM so
+      // multi-generation inheritance doesn't bloat. Both inheritMemory and
+      // the summarizer are best-effort — failure falls back to verbatim and
+      // a verbatim failure is logged but doesn't block the cycle.
       const parents = a.parentIds && a.parentIds.length > 0 ? a.parentIds : (a.parentId ? [a.parentId] : []);
       if (parents.length > 0) {
         const chosen = parents[Math.floor(Math.random() * parents.length)];
         try {
-          await inheritMemory(this.config.ecosystemDir, chosen, a.id);
+          await inheritMemory(this.config.ecosystemDir, chosen, a.id, this.summarizeForInheritance);
         } catch (err: unknown) {
           const m = err instanceof Error ? err.message : String(err);
           console.warn(`  ⚠️ Memory inheritance failed for ${a.id}: ${m}`);

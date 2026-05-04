@@ -960,6 +960,20 @@ if (!sessionStorage.getItem('tribe_token')) { location.href = 'login.html'; }
     </div>
   </section>
 
+  <!-- Skill Evolution -->
+  <section class="card">
+    <h2>🧬 Skill Evolution</h2>
+    <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:0.5rem;">
+      Population-wide rolling success rate per skill, snapshotted at each cycle_end.
+      Lines compound upward when develop_skill investments and bounty wins line up;
+      they slump when the population's bidding outpaces its competence.
+      <span id="skill-timeline-status" style="margin-left:0.5rem;"></span>
+    </div>
+    <div class="chart-container" style="height:240px;">
+      <canvas id="skill-timeline-chart"></canvas>
+    </div>
+  </section>
+
   <!-- Bottom Row -->
   <section class="bottom-panel">
 
@@ -1359,6 +1373,86 @@ const repChart = new Chart(repCtx, {
     },
   },
 });
+
+// Skill evolution chart: one line per skill, x = cycle, y = rolling success rate.
+// Backed by /api/skills/timeline. Refreshed alongside the main poll loop.
+const SKILL_COLORS = {
+  web_search:    '#58a6ff',
+  code_write:    '#39d353',
+  data_analyze:  '#d29922',
+  artifact_write:'#bc8cff',
+  observe:       '#79c0ff',
+  propose:       '#ff7b72',
+};
+const skillCtx = document.getElementById('skill-timeline-chart').getContext('2d');
+const skillChart = new Chart(skillCtx, {
+  type: 'line',
+  data: { labels: [], datasets: [] },
+  options: {
+    responsive: true, maintainAspectRatio: false,
+    color: '#8b949e',
+    plugins: {
+      legend: { position: 'top', labels: { boxWidth: 8, color: '#8b949e', font: { size: 10 } } },
+      tooltip: {
+        callbacks: {
+          label: (ctx) => {
+            const meta = ctx.dataset.sampleSizes && ctx.dataset.sampleSizes[ctx.dataIndex];
+            const rate = (ctx.parsed.y * 100).toFixed(0);
+            return meta !== undefined
+              ? `${ctx.dataset.label}: ${rate}% (n=${meta})`
+              : `${ctx.dataset.label}: ${rate}%`;
+          },
+        },
+      },
+    },
+    scales: {
+      x: { ticks: { color: '#6e7681', maxTicksLimit: 10 }, grid: { color: '#21262d' } },
+      y: {
+        beginAtZero: true, max: 1,
+        ticks: { color: '#6e7681', callback: (v) => `${(v * 100).toFixed(0)}%` },
+        grid: { color: '#21262d' },
+      },
+    },
+  },
+});
+
+async function refreshSkillTimeline() {
+  const status = document.getElementById('skill-timeline-status');
+  try {
+    const res = await authFetch('/api/skills/timeline');
+    if (!res.ok) throw new Error(`status ${res.status}`);
+    const timeline = await res.json();
+    if (!Array.isArray(timeline) || timeline.length === 0) {
+      if (status) status.textContent = '— waiting for skill_attributed events';
+      return;
+    }
+    const labels = timeline.map(s => `C${s.cycle}`);
+    const skills = Object.keys(SKILL_COLORS);
+    const datasets = skills.map(skill => {
+      const data = timeline.map(s => (s.skills[skill]?.rate ?? null));
+      const sampleSizes = timeline.map(s => s.skills[skill]?.sampleSize ?? 0);
+      return {
+        label: skill,
+        data,
+        sampleSizes,
+        borderColor: SKILL_COLORS[skill],
+        backgroundColor: SKILL_COLORS[skill] + '22',
+        tension: 0.25,
+        spanGaps: true,
+        pointRadius: 2,
+      };
+    }).filter(d => d.data.some(v => v !== null));
+    skillChart.data = { labels, datasets };
+    skillChart.update();
+    if (status) {
+      const totalSamples = timeline[timeline.length - 1].skills;
+      const skillsWithData = Object.values(totalSamples).filter(v => v.sampleSize > 0).length;
+      status.textContent = `— ${timeline.length} cycle snapshots, ${skillsWithData}/${skills.length} skills with data`;
+    }
+  } catch (err) {
+    if (status) status.textContent = `— refresh failed: ${err.message}`;
+  }
+}
 
 // ── Update Dashboard from Snapshot ──
 function updateDashboard(data) {
@@ -2370,13 +2464,15 @@ startPolling = function() {
     } catch (err) {}
     // Also load bounties on each poll cycle
     loadBounties();
+    // Skill timeline updates less often than agent state; once per poll is plenty.
+    refreshSkillTimeline();
   }, 5000);
 };
 
-// Also add bounties to the initial load
+// Also add bounties + skill timeline to the initial load
 const origLoadInitialData = loadInitialData;
 loadInitialData = function() {
-  return origLoadInitialData().then(() => loadBounties());
+  return origLoadInitialData().then(() => Promise.all([loadBounties(), refreshSkillTimeline()]));
 };
 
 // ── Bootstrap ──

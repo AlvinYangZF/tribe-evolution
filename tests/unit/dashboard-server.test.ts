@@ -609,4 +609,60 @@ describe('Dashboard Server', () => {
       expect(body.maxCycle).toBe(7);
     });
   });
+
+  describe('GET /api/skills/timeline', () => {
+    // Seed a self-contained set of cycles + skill_attributed events. We
+    // append to the same TMP_DIR log; the existing setup already has a few
+    // cycle markers from the cycle-filter test block, so this just adds more.
+    let timelineSeeded = false;
+    async function ensureTimelineSeed() {
+      if (timelineSeeded) return;
+      const eventLog = new EventLog(TMP_DIR);
+      // Cycle 10: alice succeeds twice on code_write
+      await eventLog.append({ type: 'cycle_start', agentId: 'supervisor', actorType: 'supervisor', data: { cycle: 10 } });
+      await eventLog.append({ type: 'skill_attributed', agentId: 'alice', actorType: 'agent', data: { skill: 'code_write', outcome: 'success', bountyId: 'b1', bountyType: 'bug_fix' } });
+      await eventLog.append({ type: 'skill_attributed', agentId: 'alice', actorType: 'agent', data: { skill: 'code_write', outcome: 'success', bountyId: 'b2', bountyType: 'bug_fix' } });
+      await eventLog.append({ type: 'cycle_end', agentId: 'supervisor', actorType: 'supervisor', data: { cycle: 10 } });
+      // Cycle 11: bob fails twice on code_write, alice succeeds on web_search
+      await eventLog.append({ type: 'cycle_start', agentId: 'supervisor', actorType: 'supervisor', data: { cycle: 11 } });
+      await eventLog.append({ type: 'skill_attributed', agentId: 'bob', actorType: 'agent', data: { skill: 'code_write', outcome: 'failure', bountyId: 'b3', bountyType: 'bug_fix' } });
+      await eventLog.append({ type: 'skill_attributed', agentId: 'bob', actorType: 'agent', data: { skill: 'code_write', outcome: 'failure', bountyId: 'b4', bountyType: 'bug_fix' } });
+      await eventLog.append({ type: 'skill_attributed', agentId: 'alice', actorType: 'agent', data: { skill: 'web_search', outcome: 'success', bountyId: 'b5', bountyType: 'research' } });
+      await eventLog.append({ type: 'cycle_end', agentId: 'supervisor', actorType: 'supervisor', data: { cycle: 11 } });
+      timelineSeeded = true;
+    }
+
+    it('returns one snapshot per cycle_end with population-wide rolling rates', async () => {
+      await ensureTimelineSeed();
+      const res = await authedFetch(`${baseUrl}/api/skills/timeline`);
+      expect(res.status).toBe(200);
+      const body = await res.json() as Array<{ cycle: number; skills: Record<string, { rate: number; sampleSize: number }> }>;
+
+      const c10 = body.find(s => s.cycle === 10);
+      const c11 = body.find(s => s.cycle === 11);
+      expect(c10).toBeDefined();
+      expect(c11).toBeDefined();
+
+      // Cycle 10: 2/2 success on code_write
+      expect(c10!.skills.code_write).toEqual({ rate: 1, sampleSize: 2 });
+
+      // Cycle 11: rolling window is [success, success, failure, failure] for code_write → 2/4 = 0.5
+      expect(c11!.skills.code_write.sampleSize).toBe(4);
+      expect(c11!.skills.code_write.rate).toBe(0.5);
+
+      // Cycle 11: web_search has its first attribution
+      expect(c11!.skills.web_search).toEqual({ rate: 1, sampleSize: 1 });
+    });
+
+    it('respects the window query parameter', async () => {
+      await ensureTimelineSeed();
+      // window=2 means only the last two outcomes per skill count.
+      const res = await authedFetch(`${baseUrl}/api/skills/timeline?window=2`);
+      expect(res.status).toBe(200);
+      const body = await res.json() as Array<{ cycle: number; skills: Record<string, { rate: number; sampleSize: number }> }>;
+      const c11 = body.find(s => s.cycle === 11);
+      // After bob's two failures, the last 2 outcomes are [failure, failure] → rate 0
+      expect(c11!.skills.code_write).toEqual({ rate: 0, sampleSize: 2 });
+    });
+  });
 });

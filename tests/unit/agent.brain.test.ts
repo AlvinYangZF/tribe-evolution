@@ -120,11 +120,14 @@ describe('compileAgentPrompt', () => {
     expect(prompt).toContain('idle');
   });
 
-  it('should include JSON output format instruction', () => {
+  it('should defer the output schema to the per-phase user message', () => {
+    // Since the three-phase decide() pipeline landed, each phase user
+    // message owns its own output shape. The system prompt no longer
+    // pretends there is a single canonical {action, params, reasoning}
+    // shape — it points the LLM at the per-phase instructions instead.
     const prompt = compileAgentPrompt(makeGenome(), makeState(), makeEnv());
-    expect(prompt).toContain('"action"');
-    expect(prompt).toContain('"params"');
-    expect(prompt).toContain('"reasoning"');
+    expect(prompt).toContain('user message in each cycle phase');
+    expect(prompt).not.toContain('## Output JSON');
   });
 
   it('should include core mission (SURVIVE + REPRODUCE)', () => {
@@ -162,6 +165,11 @@ describe('compileAgentPrompt', () => {
   it('should advertise update_memory in the actions list', () => {
     const prompt = compileAgentPrompt(makeGenome(), makeState(), makeEnv());
     expect(prompt).toContain('update_memory');
+  });
+
+  it('should advertise summarize_memory in the actions list', () => {
+    const prompt = compileAgentPrompt(makeGenome(), makeState(), makeEnv());
+    expect(prompt).toContain('summarize_memory');
   });
 });
 

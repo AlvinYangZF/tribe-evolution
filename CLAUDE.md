@@ -21,7 +21,7 @@ There is **no build step** in normal use — `tsx` runs TypeScript directly. `ts
 
 ## Configuration
 
-Copy `.env.example` to `.env`. **Bug to be aware of:** `src/config/index.ts` currently hardcodes `dotenv.config({ path: '/Users/zifengyang/tribe-evolution/.env' })`. On any other machine you must either edit that path, set env vars another way, or fix the loader to use a relative path before `loadConfig()` will see your `.env`.
+Copy `.env.example` to `.env`. The loader (`src/config/index.ts`) calls `dotenv.config()` without a path, so it reads `.env` from the process's current working directory — run commands from the repo root.
 
 Required external services:
 - `DEEPSEEK_API_KEY` — agent decisions call `https://api.deepseek.com/chat/completions` (model `deepseek-chat`).
