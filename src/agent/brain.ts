@@ -192,8 +192,7 @@ ${actionLines}
 4. Use web_search to discover new opportunities
 5. A good proposal needs nothing but a good idea - be creative and proactive!
 
-## Output JSON
-{"action": "...", "params": {}, "reasoning": "..."}`;
+The user message in each cycle phase tells you exactly which JSON shape to return.`;
 }
 
 // ─── Decision Parser ────────────────────────────────────────────────────────
