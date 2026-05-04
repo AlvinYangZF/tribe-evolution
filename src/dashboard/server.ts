@@ -525,10 +525,17 @@ const agentsDir = path.join(ecosystemDir, 'agents');
         return;
       }
 
+      // ─── Per-agent sub-resources ───────────────────────────────────────
+      // ROUTE ORDER: every `/api/agents/:id/<suffix>` route MUST be
+      // registered before the generic `/api/agents/:id` handler below.
+      // The generic handler does `pathname.slice('/api/agents/'.length)`
+      // and treats the result as the agent id — if it runs first for a
+      // request like `/api/agents/abc/last-decision`, it interprets
+      // "abc/last-decision" as the agent id and 404s. New sub-resources
+      // should slot in this block, not below.
+
       // Per-agent debug snapshot of the latest decide() result, including
-      // explore/evaluate phase outputs. Must come BEFORE the generic
-      // /api/agents/:id handler below; otherwise the slice() there treats
-      // ":id/last-decision" as the agent id and 404s.
+      // explore/evaluate phase outputs.
       if (pathname.startsWith('/api/agents/') && pathname.endsWith('/last-decision') && req.method === 'GET') {
         const agentId = pathname.slice('/api/agents/'.length, -'/last-decision'.length);
         if (!agentId) {
@@ -565,6 +572,9 @@ const agentsDir = path.join(ecosystemDir, 'agents');
         return;
       }
 
+      // Generic agent detail. Any new `/api/agents/:id/<suffix>` route
+      // must be registered ABOVE this block (see the per-agent
+      // sub-resources section a bit higher).
       if (pathname.startsWith('/api/agents/') && req.method === 'GET') {
         const agentId = pathname.slice('/api/agents/'.length);
         if (!agentId) {
