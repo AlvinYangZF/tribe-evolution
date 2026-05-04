@@ -18,7 +18,7 @@ export type DecisionAction =
   | 'propose'
   | 'lock_resource'
   | 'trade'
-  | 'bid_bounty' | 'develop_skill' | 'update_memory' | 'idle';
+  | 'bid_bounty' | 'develop_skill' | 'update_memory' | 'summarize_memory' | 'idle';
 
 export const ALL_DECISION_ACTIONS: DecisionAction[] = [
   'web_search',
@@ -30,6 +30,7 @@ export const ALL_DECISION_ACTIONS: DecisionAction[] = [
   'bid_bounty',
   'develop_skill',
   'update_memory',
+  'summarize_memory',
   'idle',
 ];
 
@@ -98,6 +99,7 @@ const ACTION_DESCRIPTIONS: Record<DecisionAction, string> = {
   lock_resource: '抢占一个资源',
   trade: '出价购买资源释放权',
   update_memory: '用 params.content 重写你的私人备忘录（最多 4000 字节，跨周期保留，子代会继承）',
+  summarize_memory: '请 LLM 把你当前的备忘录压缩成更精炼的版本（保留最有用的经验），适合在备忘录接近上限时整理',
   idle: '本周期什么都不做（省钱）',
 };
 

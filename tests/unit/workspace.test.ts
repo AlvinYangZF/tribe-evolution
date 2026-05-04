@@ -6,7 +6,9 @@ import {
   readMemory,
   writeMemory,
   inheritMemory,
+  summarizeOwnMemory,
   MEMORY_LIMIT_BYTES,
+  SUMMARIZE_MIN_BYTES,
 } from '../../src/supervisor/workspace.js';
 
 let ECO_DIR: string;
@@ -130,5 +132,66 @@ describe('inheritMemory', () => {
     await inheritMemory(ECO_DIR, 'parent', 'child', summarizer);
     expect(called).toBe(false);
     expect(await readMemory(ECO_DIR, 'child')).toBe('');
+  });
+});
+
+describe('summarizeOwnMemory', () => {
+  // A long enough payload to trigger summarization (over SUMMARIZE_MIN_BYTES).
+  const LONG_NOTES = (
+    'I keep losing bid_bounty on bug_fix to specialists. Code_write is stuck around 30%. ' +
+    'Trade has yielded 200 tokens reliably when iron supplies tighten near cycle 30. ' +
+    'My collab_bias is high so I should partner with workers, not aggressors. ' +
+    'Web_search rarely converts unless followed by write_artifact. '
+  ).repeat(3);
+
+  it('rewrites notes when they are long enough and the summarizer succeeds', async () => {
+    expect(LONG_NOTES.length).toBeGreaterThanOrEqual(SUMMARIZE_MIN_BYTES);
+    await writeMemory(ECO_DIR, 'a1', LONG_NOTES);
+    const summary = 'partner with workers; trade near cycle 30; pair web_search with write_artifact.';
+    const summarizer = async () => summary;
+    const result = await summarizeOwnMemory(ECO_DIR, 'a1', summarizer);
+    expect(result.summarized).toBe(true);
+    expect(result.beforeBytes).toBeGreaterThan(result.afterBytes);
+    expect(await readMemory(ECO_DIR, 'a1')).toBe(summary);
+  });
+
+  it('is a no-op when there are no notes', async () => {
+    const summarizer = async () => 'should not be called';
+    const result = await summarizeOwnMemory(ECO_DIR, 'fresh', summarizer);
+    expect(result.summarized).toBe(false);
+    expect(result.reason).toBe('no_notes');
+    expect(await readMemory(ECO_DIR, 'fresh')).toBe('');
+  });
+
+  it('is a no-op when the existing notes are below the min-byte threshold', async () => {
+    const tinyNotes = 'too short to bother';
+    expect(tinyNotes.length).toBeLessThan(SUMMARIZE_MIN_BYTES);
+    await writeMemory(ECO_DIR, 'a1', tinyNotes);
+    let called = false;
+    const summarizer = async () => { called = true; return 'compacted'; };
+    const result = await summarizeOwnMemory(ECO_DIR, 'a1', summarizer);
+    expect(result.summarized).toBe(false);
+    expect(result.reason).toBe('too_short');
+    expect(called).toBe(false);
+    // Original content untouched.
+    expect(await readMemory(ECO_DIR, 'a1')).toBe(tinyNotes);
+  });
+
+  it('keeps the original notes when the summarizer throws', async () => {
+    await writeMemory(ECO_DIR, 'a1', LONG_NOTES);
+    const summarizer = async () => { throw new Error('LLM down'); };
+    const result = await summarizeOwnMemory(ECO_DIR, 'a1', summarizer);
+    expect(result.summarized).toBe(false);
+    expect(result.reason).toBe('summarizer_failed');
+    expect(await readMemory(ECO_DIR, 'a1')).toBe(LONG_NOTES);
+  });
+
+  it('keeps the original notes when the summarizer returns whitespace only', async () => {
+    await writeMemory(ECO_DIR, 'a1', LONG_NOTES);
+    const summarizer = async () => '   \n   ';
+    const result = await summarizeOwnMemory(ECO_DIR, 'a1', summarizer);
+    expect(result.summarized).toBe(false);
+    expect(result.reason).toBe('empty_summary');
+    expect(await readMemory(ECO_DIR, 'a1')).toBe(LONG_NOTES);
   });
 });

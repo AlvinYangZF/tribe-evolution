@@ -166,6 +166,11 @@ describe('compileAgentPrompt', () => {
     const prompt = compileAgentPrompt(makeGenome(), makeState(), makeEnv());
     expect(prompt).toContain('update_memory');
   });
+
+  it('should advertise summarize_memory in the actions list', () => {
+    const prompt = compileAgentPrompt(makeGenome(), makeState(), makeEnv());
+    expect(prompt).toContain('summarize_memory');
+  });
 });
 
 describe('parseDecision', () => {

@@ -16,7 +16,7 @@ import { ensureDir, safeWriteJSON } from '../shared/filesystem.js';
 import { BountyBoard } from './bounty-board.js';
 import { Treasury } from './treasury.js';
 import { attributeBountyOutcome, evaluateSkillPromotion, verdictToDelta } from './skill-evaluator.js';
-import { readMemory, writeMemory, inheritMemory, MEMORY_LIMIT_BYTES, type Summarizer } from './workspace.js';
+import { readMemory, writeMemory, inheritMemory, summarizeOwnMemory, MEMORY_LIMIT_BYTES, type Summarizer } from './workspace.js';
 import type { AgentState, SkillName } from '../shared/types.js';
 
 const ALL_SKILL_NAMES: SkillName[] = ['web_search', 'code_write', 'data_analyze', 'artifact_write', 'observe', 'propose'];
@@ -165,6 +165,7 @@ async function decideForAgent(
     else if (decision.action === 'lock_resource') score = 25;
     else if (decision.action === 'trade') score = 30;
     else if (decision.action === 'update_memory') score = 30;
+    else if (decision.action === 'summarize_memory') score = 25;
     else if (decision.action === 'observe') score = 15;
 
     agent.contributionScore = score;
@@ -234,6 +235,28 @@ async function decideForAgent(
         const written = await writeMemory(ecosystemDir, agent.id, content);
         const truncated = Buffer.byteLength(content, 'utf-8') > MEMORY_LIMIT_BYTES;
         console.log(`  📝 ${agent.id} updated memory (${written} bytes${truncated ? ', truncated' : ''})`);
+      }
+    }
+
+    // When agent chooses 'summarize_memory', compact its own notes via the
+    // LLM. The agent pays the LLM cost from its own balance through the
+    // shared llmCall closure (cycleTokenUsage accumulates and is debited
+    // at end of cycle). No-ops on empty / too-short notes / LLM failure
+    // are logged but don't error.
+    if (decision.action === 'summarize_memory') {
+      const agentSummarizer: Summarizer = async (text, maxBytes) => {
+        const sys = `Compact your own working notes for use in future cycles. Keep only the most actionable lessons — what reliably worked, what didn't, who to trust, what to bid on. Output the new notes only — no preamble, no JSON, no headers. Aim for ${maxBytes} bytes or fewer.`;
+        const user = `Current notes:\n\n${text}\n\nCompacted notes:`;
+        const out = (await llmCall(sys, user, { maxTokens: 400 })).trim();
+        if (!out) throw new Error('empty summary');
+        return out;
+      };
+      const result = await summarizeOwnMemory(ecosystemDir, agent.id, agentSummarizer);
+      if (result.summarized) {
+        console.log(`  📝 ${agent.id} compacted memory (${result.beforeBytes} → ${result.afterBytes} bytes)`);
+      } else {
+        agent.contributionScore = 10;
+        console.log(`  📝 ${agent.id} summarize_memory no-op (${result.reason})`);
       }
     }
 

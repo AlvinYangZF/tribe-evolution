@@ -72,6 +72,61 @@ export async function writeMemory(ecosystemDir: string, agentId: string, content
 }
 
 /**
+ * Below this byte count, calling the summarizer on an agent's own notes
+ * is wasteful — the notes are already short enough that compaction
+ * wouldn't add headroom. Used by summarizeOwnMemory().
+ */
+export const SUMMARIZE_MIN_BYTES = 512;
+
+export interface SummarizeOwnMemoryResult {
+  /** True iff the notes were rewritten via the summarizer. False when
+   *  the action was a no-op (no notes / too-short notes / summarizer
+   *  failure / empty summary). */
+  summarized: boolean;
+  /** Reason the action was a no-op, when summarized === false. */
+  reason?: 'no_notes' | 'too_short' | 'summarizer_failed' | 'empty_summary';
+  beforeBytes: number;
+  afterBytes: number;
+}
+
+/**
+ * Compact an agent's own notes via the LLM and write the shorter version
+ * back. The agent picks this action when its notes are getting long; the
+ * supervisor wires up a Summarizer that uses the agent's per-cycle LLM
+ * call (so the agent pays for its own compaction).
+ *
+ * Always non-throwing — returns a result object describing what happened.
+ * That keeps the supervisor's action dispatch simple (no try/catch needed)
+ * and gives the caller something to log.
+ */
+export async function summarizeOwnMemory(
+  ecosystemDir: string,
+  agentId: string,
+  summarize: Summarizer,
+  targetBytes: number = INHERITANCE_SUMMARY_BYTES,
+): Promise<SummarizeOwnMemoryResult> {
+  const before = await readMemory(ecosystemDir, agentId);
+  const beforeBytes = Buffer.byteLength(before, 'utf-8');
+  if (!before.trim()) {
+    return { summarized: false, reason: 'no_notes', beforeBytes, afterBytes: beforeBytes };
+  }
+  if (beforeBytes < SUMMARIZE_MIN_BYTES) {
+    return { summarized: false, reason: 'too_short', beforeBytes, afterBytes: beforeBytes };
+  }
+  let compact: string;
+  try {
+    compact = await summarize(before, targetBytes);
+  } catch {
+    return { summarized: false, reason: 'summarizer_failed', beforeBytes, afterBytes: beforeBytes };
+  }
+  if (!compact.trim()) {
+    return { summarized: false, reason: 'empty_summary', beforeBytes, afterBytes: beforeBytes };
+  }
+  const afterBytes = await writeMemory(ecosystemDir, agentId, compact);
+  return { summarized: true, beforeBytes, afterBytes };
+}
+
+/**
  * Copy a parent's notes to a child's workspace, prepending a small header so
  * the child knows the memory is inherited rather than self-written. No-op
  * when the parent has no notes — we don't want to seed an empty file.
