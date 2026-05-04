@@ -22,6 +22,18 @@ import type { AgentState, SkillName } from '../shared/types.js';
 
 const ALL_SKILL_NAMES: SkillName[] = ['web_search', 'code_write', 'data_analyze', 'artifact_write', 'observe', 'propose'];
 
+/**
+ * Floor at which the three-phase decide() pipeline is skipped for an
+ * agent. Below this many tokens an agent typically can't afford even a
+ * single cycle's worth of LLM calls (PHASE_BUDGETS sum to 1000 output
+ * tokens, plus input prompt tokens), so spending what they have left on
+ * thinking is throwing good money after bad. We take the agent through
+ * the cycle as a synthetic idle (still ages, still gets a last-decision
+ * snapshot) but never call the LLM. Tunable; conservative starting
+ * point at half a fresh agent's seed allocation.
+ */
+const CHEAP_DECIDE_THRESHOLD = 500;
+
 type DigestEntry = { id: string; agentId: string; title: string; status: string };
 
 /**
@@ -92,6 +104,26 @@ async function decideForAgent(
   const appendEvent = (e: AppendEventInput) => eventLog.append(e);
   agent.age += 1;
   const g = agent.genome;
+
+  // Cheap-decide fast path: skip the three-phase LLM pipeline entirely
+  // for agents whose token balance can't sustain a single cycle. Still
+  // counts as a cycle (age was incremented above; a synthetic
+  // last-decision snapshot is written so the dashboard sees the agent),
+  // but no LLM call is made. Action handlers don't run either, since
+  // every meaningful action is itself token-cost-gated.
+  if (agent.tokenBalance < CHEAP_DECIDE_THRESHOLD) {
+    agent.contributionScore = 5;
+    try {
+      await writeLastDecision(ecosystemDir, agent.id, {
+        cycle: cycleNum,
+        timestamp: Date.now(),
+        action: 'idle',
+        reasoning: `Skipped LLM: insufficient balance (${agent.tokenBalance} < ${CHEAP_DECIDE_THRESHOLD})`,
+      });
+    } catch { /* best-effort */ }
+    console.log(`  💸 ${agent.id} insufficient balance (${agent.tokenBalance}) — skipping LLM`);
+    return;
+  }
 
   try {
     // Token bookkeeping: every LLM call this cycle (the three decide()
