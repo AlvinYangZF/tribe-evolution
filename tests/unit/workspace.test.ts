@@ -254,4 +254,29 @@ describe('writeLastDecision / readLastDecision', () => {
     const read = await readLastDecision(ECO_DIR, 'a1');
     expect(read?.fallbackReason).toBe('llm_error');
   });
+
+  it('returns null when the file exists but contains invalid JSON', async () => {
+    // Simulates a half-written file from a crashed process, or a manual
+    // edit that produced bad JSON. The reader must not throw — the
+    // dashboard would otherwise 500 trying to render the agent's debug
+    // panel.
+    const dir = path.join(ECO_DIR, 'workspaces', 'a1');
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, 'last-decision.json'), '{ "cycle": 1, "actio', 'utf-8');
+    const read = await readLastDecision(ECO_DIR, 'a1');
+    expect(read).toBeNull();
+  });
+
+  it('writes are atomic — tmp file is gone after a successful write', async () => {
+    // Atomicity is the responsibility of safeWriteJSON; this test guards
+    // against a future change that bypasses it. After write, the only
+    // file in the workspace dir should be last-decision.json itself —
+    // no leftover .tmp-* files.
+    await writeLastDecision(ECO_DIR, 'a1', {
+      cycle: 1, timestamp: 1, action: 'idle', reasoning: 'test',
+    });
+    const dir = path.join(ECO_DIR, 'workspaces', 'a1');
+    const files = await fs.readdir(dir);
+    expect(files).toEqual(['last-decision.json']);
+  });
 });

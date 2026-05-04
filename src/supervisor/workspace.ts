@@ -13,7 +13,7 @@
 
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
-import { ensureDir } from '../shared/filesystem.js';
+import { ensureDir, safeReadJSON, safeWriteJSON } from '../shared/filesystem.js';
 
 const WORKSPACES_DIR = 'workspaces';
 const NOTES_FILE = 'notes.md';
@@ -73,26 +73,23 @@ export interface LastDecisionSnapshot {
 }
 
 /** Write the most recent decide() result to last-decision.json, overwriting
- *  any previous snapshot. Creates the workspace directory on demand. */
+ *  any previous snapshot. Routes through `safeWriteJSON` so the write is
+ *  atomic (tmp + rename) — a process crash mid-write can't leave the file
+ *  in a half-written state for the next reader. */
 export async function writeLastDecision(
   ecosystemDir: string,
   agentId: string,
   snapshot: LastDecisionSnapshot,
 ): Promise<void> {
-  const dir = workspaceDir(ecosystemDir, agentId);
-  await ensureDir(dir);
-  await fs.writeFile(lastDecisionPath(ecosystemDir, agentId), JSON.stringify(snapshot, null, 2), 'utf-8');
+  await safeWriteJSON(lastDecisionPath(ecosystemDir, agentId), snapshot);
 }
 
-/** Read the most recent decide() snapshot, or null when none exists yet. */
+/** Read the most recent decide() snapshot, or null when the file is missing
+ *  / corrupt / unreadable. Defers to `safeReadJSON` which returns null on
+ *  any error — defensive against half-written files left by a previous
+ *  crash and against manual edits that produce invalid JSON. */
 export async function readLastDecision(ecosystemDir: string, agentId: string): Promise<LastDecisionSnapshot | null> {
-  try {
-    const raw = await fs.readFile(lastDecisionPath(ecosystemDir, agentId), 'utf-8');
-    return JSON.parse(raw) as LastDecisionSnapshot;
-  } catch (err: unknown) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
-    throw err;
-  }
+  return await safeReadJSON<LastDecisionSnapshot>(lastDecisionPath(ecosystemDir, agentId));
 }
 
 /**
