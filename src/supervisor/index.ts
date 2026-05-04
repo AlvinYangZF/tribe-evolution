@@ -15,6 +15,7 @@ import { classifyReply } from './email-approval.js';
 import { ensureDir, safeWriteJSON } from '../shared/filesystem.js';
 import { BountyBoard } from './bounty-board.js';
 import { Treasury } from './treasury.js';
+import { TokenLedger } from './token-ledger.js';
 import { attributeBountyOutcome, evaluateSkillPromotion, verdictToDelta } from './skill-evaluator.js';
 import { readMemory, writeMemory, inheritMemory, summarizeOwnMemory, MEMORY_LIMIT_BYTES, type Summarizer } from './workspace.js';
 import type { AgentState, SkillName } from '../shared/types.js';
@@ -93,10 +94,12 @@ async function decideForAgent(
   const g = agent.genome;
 
   try {
-    // Token usage accumulates across the three decide() phases (explore +
-    // evaluate + execute), so we use += rather than = and rely on opts to
-    // size each call.
-    let cycleTokenUsage = 0;
+    // Token bookkeeping: every LLM call this cycle (the three decide()
+    // phases plus any action handler that calls llmCall, e.g.
+    // summarize_memory) feeds the ledger. flushTokenUsage() debits the
+    // unbilled delta and must be called after each stage that may have
+    // accumulated new usage. See token-ledger.ts for the watermark logic.
+    const ledger = new TokenLedger();
     const llmCall = async (
       sys: string,
       userMsg: string,
@@ -112,8 +115,15 @@ async function decideForAgent(
         ],
         maxTokens: opts?.maxTokens ?? 300,
       });
-      cycleTokenUsage += resp.tokenUsage?.total ?? 0;
+      ledger.recordUsage(resp.tokenUsage?.total ?? 0);
       return resp.content;
+    };
+    const flushTokenUsage = async () => {
+      const delta = ledger.markDeducted();
+      if (delta > 0) {
+        agent.tokenBalance = Math.max(0, agent.tokenBalance - delta);
+        await saveAgent(agent);
+      }
     };
 
     const memory = await readMemory(ecosystemDir, agent.id);
@@ -150,21 +160,8 @@ async function decideForAgent(
       });
     }
 
-    // Token bookkeeping: action handlers below are allowed to make additional
-    // LLM calls (e.g. summarize_memory uses the agent's own llmCall closure),
-    // and each call increments cycleTokenUsage. We track a watermark of how
-    // much has already been deducted so flushTokenUsage() only charges the
-    // delta — preventing both double-billing and (the previous bug) free LLM
-    // calls for action-handler usage that happened after the initial debit.
-    let lastDeductedTokens = 0;
-    const flushTokenUsage = async () => {
-      const delta = cycleTokenUsage - lastDeductedTokens;
-      if (delta > 0) {
-        agent.tokenBalance = Math.max(0, agent.tokenBalance - delta);
-        lastDeductedTokens = cycleTokenUsage;
-        await saveAgent(agent);
-      }
-    };
+    // Charge the agent for the three decide() phases. Action handlers
+    // below may call flushTokenUsage() again if they record more usage.
     await flushTokenUsage();
 
     let score = 10;
