@@ -709,7 +709,7 @@ export class Supervisor extends EventEmitter {
             await this.proposalManager.approveProposal(proposalId, 'user');
             console.log(`  ✅ Email approved: ${proposalId}`);
             await this.eventLog.append({
-              type: 'proposal_created',
+              type: 'proposal_approved',
               agentId: 'user',
               actorType: 'user',
               data: { action: 'approved_via_email', proposalId },
@@ -718,7 +718,7 @@ export class Supervisor extends EventEmitter {
             await this.proposalManager.rejectProposal(proposalId, reason, 'user');
             console.log(`  ❌ Email rejected: ${proposalId} (${reason})`);
             await this.eventLog.append({
-              type: 'proposal_created',
+              type: 'proposal_rejected',
               agentId: 'user',
               actorType: 'user',
               data: { action: 'rejected_via_email', proposalId, reason },

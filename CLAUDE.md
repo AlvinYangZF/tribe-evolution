@@ -108,4 +108,3 @@ The API server still re-reads `ecosystem/agents/*.json` directly — it does not
 - **Don't add a database, ORM, or bundler.** Persistence is intentionally JSON-on-disk so the dashboard, the supervisor, and tests can all touch the same state.
 - **Reproduction needs both genders** — if you add agents programmatically, set `diploidGenome.gender` or call `createRandomDiploidGenome(gender)`; otherwise `canReproduce` will exclude them and the population collapses to asexual cloning.
 - **Vitest globals are on** (`globals: true` in `vitest.config.ts`); `describe`/`it`/`expect` are still imported explicitly throughout the existing tests — keep that convention.
-- `tests/unit/life-cycle.test.ts` imports an `eliminate` symbol that no longer exists (replaced by `eliminateStepped`). If you touch life-cycle exports, expect to fix that test rather than restoring the old name.
