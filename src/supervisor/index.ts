@@ -17,7 +17,7 @@ import { BountyBoard } from './bounty-board.js';
 import { Treasury } from './treasury.js';
 import { TokenLedger } from './token-ledger.js';
 import { attributeBountyOutcome, evaluateSkillPromotion, verdictToDelta } from './skill-evaluator.js';
-import { readMemory, writeMemory, inheritMemory, summarizeOwnMemory, writeLastDecision, MEMORY_LIMIT_BYTES, type Summarizer } from './workspace.js';
+import { readMemory, writeMemory, inheritMemory, summarizeOwnMemory, writeLastDecision, removeWorkspace, MEMORY_LIMIT_BYTES, type Summarizer } from './workspace.js';
 import type { AgentState, SkillName } from '../shared/types.js';
 
 const ALL_SKILL_NAMES: SkillName[] = ['web_search', 'code_write', 'data_analyze', 'artifact_write', 'observe', 'propose'];
@@ -627,6 +627,11 @@ export class Supervisor extends EventEmitter {
     const extinct = evolved.filter(a => !a.alive);
     for (const a of extinct) {
       await this.eventLog.append({ type: 'agent_extinct', agentId: a.id, actorType: 'agent', data: { generation: a.generation, age: a.age, fitness: a.fitness } });
+      // Workspace hygiene: notes.md and last-decision.json have no use
+      // once the agent is dead. The agent file itself stays on disk
+      // (alive=false) for the lineage view, and the event log retains
+      // the audit trail. removeWorkspace is best-effort and never throws.
+      await removeWorkspace(this.config.ecosystemDir, a.id);
       console.log(`  💀 Extinct: ${a.id} (${a.genome.personaName}) age=${a.age}`);
     }
 
