@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import { WebSocketServer, WebSocket } from 'ws';
 import { EventLog } from '../supervisor/event-log.js';
+import { readLastDecision } from '../supervisor/workspace.js';
 import type { AgentState, EventLogEntry, Resource, Deal, EventType, Bounty, BountyStatus, Bid } from '../shared/types.js';
 import { safeReadJSON, safeWriteJSON } from '../shared/filesystem.js';
 
@@ -154,11 +155,32 @@ const agentsDir = path.join(ecosystemDir, 'agents');
     }
   }
 
+  // Cached snapshot of the parsed event log, invalidated whenever the
+  // backing file's mtime changes. Without this, every /api/events,
+  // /api/events/cycle-range, /api/skills/timeline call re-reads and
+  // re-parses the entire JSONL — O(N) per request and a perf wall once
+  // the log grows. mtime moves on every supervisor append, so the
+  // invalidation is automatic and lock-free.
+  const eventLogPath = path.join(ecosystemDir, 'event-log', 'events.jsonl');
+  let eventsCache: { mtimeMs: number; events: EventLogEntry[] } | null = null;
+
   async function loadAllEvents(): Promise<EventLogEntry[]> {
+    let mtimeMs = 0;
+    try {
+      const st = await fs.stat(eventLogPath);
+      mtimeMs = st.mtimeMs;
+    } catch {
+      // File doesn't exist yet — no events to return.
+      return [];
+    }
+    if (eventsCache && eventsCache.mtimeMs === mtimeMs) {
+      return eventsCache.events;
+    }
     const all: EventLogEntry[] = [];
     for await (const entry of eventLog.replay(0)) {
       all.push(entry);
     }
+    eventsCache = { mtimeMs, events: all };
     return all;
   }
 
@@ -220,19 +242,18 @@ const agentsDir = path.join(ecosystemDir, 'agents');
   }
 
   /**
-   * Population-wide skill performance over time.
+   * Skill performance over time as a per-cycle rolling-rate timeline.
    *
    * Walks the event log, maintains one rolling window of the last N
-   * skill_attributed outcomes per skill (mixing all agents), and snapshots
-   * the per-skill success rate at every cycle_end marker. The result lets
-   * the dashboard render one line per skill showing whether the population
-   * is collectively getting better or worse at that skill across cycles.
-   *
-   * Per-agent breakdown is left as a follow-up; the population-wide signal
-   * is the one that's directly interpretable as "is evolution working?".
+   * `skill_attributed` outcomes per skill, and snapshots the per-skill
+   * success rate at every `cycle_end` marker. With no `agentId`, the
+   * window mixes all agents — the population-wide "is evolution working?"
+   * view. With an `agentId`, only that agent's attributions enter the
+   * window — the per-agent learning curve used by the agent detail modal.
    */
   async function loadSkillTimeline(
     windowSize: number = 10,
+    agentId?: string,
   ): Promise<Array<{ cycle: number; skills: Record<string, { rate: number; sampleSize: number }> }>> {
     const all = await loadAllEvents();
     const window: Record<string, Array<'success' | 'failure'>> = {};
@@ -244,6 +265,7 @@ const agentsDir = path.join(ecosystemDir, 'agents');
         const c = (e.data as { cycle?: unknown })?.cycle;
         if (typeof c === 'number') currentCycle = c;
       } else if (e.type === 'skill_attributed') {
+        if (agentId && e.agentId !== agentId) continue;
         const data = e.data as { skill?: unknown; outcome?: unknown };
         if (typeof data.skill !== 'string') continue;
         if (data.outcome !== 'success' && data.outcome !== 'failure') continue;
@@ -503,6 +525,56 @@ const agentsDir = path.join(ecosystemDir, 'agents');
         return;
       }
 
+      // ─── Per-agent sub-resources ───────────────────────────────────────
+      // ROUTE ORDER: every `/api/agents/:id/<suffix>` route MUST be
+      // registered before the generic `/api/agents/:id` handler below.
+      // The generic handler does `pathname.slice('/api/agents/'.length)`
+      // and treats the result as the agent id — if it runs first for a
+      // request like `/api/agents/abc/last-decision`, it interprets
+      // "abc/last-decision" as the agent id and 404s. New sub-resources
+      // should slot in this block, not below.
+
+      // Per-agent debug snapshot of the latest decide() result, including
+      // explore/evaluate phase outputs.
+      if (pathname.startsWith('/api/agents/') && pathname.endsWith('/last-decision') && req.method === 'GET') {
+        const agentId = pathname.slice('/api/agents/'.length, -'/last-decision'.length);
+        if (!agentId) {
+          res.writeHead(400);
+          res.end(JSON.stringify({ error: 'Missing agent ID' }));
+          return;
+        }
+        const snapshot = await readLastDecision(ecosystemDir, agentId);
+        if (!snapshot) {
+          res.writeHead(404);
+          res.end(JSON.stringify({ error: 'No decision snapshot yet' }));
+          return;
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(snapshot));
+        return;
+      }
+
+      // Per-agent skill timeline — same shape as /api/skills/timeline but
+      // filtered to a single agent's skill_attributed events, so the
+      // agent detail modal can render a learning curve specific to them.
+      if (pathname.startsWith('/api/agents/') && pathname.endsWith('/skill-timeline') && req.method === 'GET') {
+        const agentId = pathname.slice('/api/agents/'.length, -'/skill-timeline'.length);
+        if (!agentId) {
+          res.writeHead(400);
+          res.end(JSON.stringify({ error: 'Missing agent ID' }));
+          return;
+        }
+        const windowRaw = url.searchParams.get('window');
+        const windowSize = windowRaw && Number.isFinite(parseInt(windowRaw, 10)) ? parseInt(windowRaw, 10) : 10;
+        const timeline = await loadSkillTimeline(windowSize, agentId);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(timeline));
+        return;
+      }
+
+      // Generic agent detail. Any new `/api/agents/:id/<suffix>` route
+      // must be registered ABOVE this block (see the per-agent
+      // sub-resources section a bit higher).
       if (pathname.startsWith('/api/agents/') && req.method === 'GET') {
         const agentId = pathname.slice('/api/agents/'.length);
         if (!agentId) {

@@ -129,6 +129,37 @@ describe('Dashboard Server', () => {
       const res = await authedFetch(`${baseUrl}/api/agents/nonexistent`);
       expect(res.status).toBe(404);
     });
+
+    it('GET /api/agents/:id/last-decision returns 404 when no snapshot has been written', async () => {
+      const res = await authedFetch(`${baseUrl}/api/agents/agent_001/last-decision`);
+      expect(res.status).toBe(404);
+    });
+
+    it('GET /api/agents/:id/last-decision returns the snapshot when one exists', async () => {
+      // Seed a last-decision.json file directly. Mirrors what
+      // writeLastDecision in workspace.ts produces.
+      const dir = path.join(TMP_DIR, 'workspaces', 'agent_001');
+      await fs.mkdir(dir, { recursive: true });
+      const snapshot = {
+        cycle: 42,
+        timestamp: 1700000000000,
+        action: 'bid_bounty',
+        reasoning: 'going for it',
+        phases: {
+          explore: { observations: ['low tokens'], focus_area: 'earn' },
+          evaluate: { candidates: [{ action: 'bid_bounty', why: 'fastest', expected_value: 70 }], top_choice: 'bid_bounty' },
+        },
+      };
+      await fs.writeFile(path.join(dir, 'last-decision.json'), JSON.stringify(snapshot, null, 2), 'utf-8');
+
+      const res = await authedFetch(`${baseUrl}/api/agents/agent_001/last-decision`);
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.cycle).toBe(42);
+      expect(body.action).toBe('bid_bounty');
+      expect(body.phases?.explore?.focus_area).toBe('earn');
+      expect(body.phases?.evaluate?.top_choice).toBe('bid_bounty');
+    });
   });
 
   describe('WebSocket', () => {
@@ -608,6 +639,22 @@ describe('Dashboard Server', () => {
       expect(body.minCycle).toBe(5);
       expect(body.maxCycle).toBe(7);
     });
+
+    it('reflects new appends to events.jsonl on the next request (mtime cache invalidation)', async () => {
+      // Snapshot existing range, append a higher-cycle marker, hit the
+      // endpoint again, and verify the new max shows up. Guards against
+      // a future cache that forgets to invalidate.
+      const before = await (await authedFetch(`${baseUrl}/api/events/cycle-range`)).json() as { maxCycle: number | null };
+      const eventLog = new EventLog(TMP_DIR);
+      const newCycle = (before.maxCycle ?? 0) + 100;
+      // Two cycle markers — one tiny mtime tick should be enough on
+      // ext4/APFS, but writing two bumps it for sure on coarse-grained
+      // filesystems too.
+      await eventLog.append({ type: 'cycle_start', agentId: 'supervisor', actorType: 'supervisor', data: { cycle: newCycle } });
+      await eventLog.append({ type: 'cycle_end', agentId: 'supervisor', actorType: 'supervisor', data: { cycle: newCycle } });
+      const after = await (await authedFetch(`${baseUrl}/api/events/cycle-range`)).json() as { maxCycle: number | null };
+      expect(after.maxCycle).toBe(newCycle);
+    });
   });
 
   describe('GET /api/skills/timeline', () => {
@@ -663,6 +710,28 @@ describe('Dashboard Server', () => {
       const c11 = body.find(s => s.cycle === 11);
       // After bob's two failures, the last 2 outcomes are [failure, failure] → rate 0
       expect(c11!.skills.code_write).toEqual({ rate: 0, sampleSize: 2 });
+    });
+
+    it('GET /api/agents/:id/skill-timeline filters to that agent only', async () => {
+      // Reuses the same seed: alice has 2 successes on code_write and
+      // 1 success on web_search. bob has 2 failures on code_write.
+      await ensureTimelineSeed();
+      const res = await authedFetch(`${baseUrl}/api/agents/alice/skill-timeline`);
+      expect(res.status).toBe(200);
+      const body = await res.json() as Array<{ cycle: number; skills: Record<string, { rate: number; sampleSize: number }> }>;
+
+      // Only alice's outcomes should be in the rolling window — bob's two
+      // failures must NOT show up here.
+      const cycles = body.map(s => s.cycle);
+      const c10 = body.find(s => s.cycle === 10);
+      const c11 = body.find(s => s.cycle === 11);
+
+      // Cycle 10: alice has 2 successes on code_write
+      expect(c10?.skills.code_write).toEqual({ rate: 1, sampleSize: 2 });
+      // Cycle 11: still 2/2 on code_write (bob's failures excluded), and
+      // alice picked up web_search.
+      expect(c11?.skills.code_write).toEqual({ rate: 1, sampleSize: 2 });
+      expect(c11?.skills.web_search).toEqual({ rate: 1, sampleSize: 1 });
     });
   });
 });

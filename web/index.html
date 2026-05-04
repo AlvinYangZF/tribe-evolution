@@ -933,6 +933,17 @@ if (!sessionStorage.getItem('tribe_token')) { location.href = 'login.html'; }
     </div>
   </div>
 
+  <!-- Agent Detail Modal -->
+  <div id="agent-modal" class="modal-overlay">
+    <div class="modal">
+      <h3>
+        <span id="agent-modal-title">🤖 Agent</span>
+        <button class="modal-close" onclick="closeAgentModal()">✕</button>
+      </h3>
+      <div id="agent-modal-body"></div>
+    </div>
+  </div>
+
   <!-- Left: Agent Cards -->
   <section class="card">
     <h2>🤖 Agents (<span id="agent-count">0</span>)</h2>
@@ -1247,7 +1258,7 @@ function renderAgentCard(agent) {
   const genderClass = agent.gender ? 'gender-' + agent.gender : '';
 
   return `
-    <div class="agent-card ${alive ? '' : 'dead'}" style="border-left-color:${color}">
+    <div class="agent-card ${alive ? '' : 'dead'}" style="border-left-color:${color};cursor:pointer;" onclick="openAgentDetail('${escapeHtml(agent.id)}')" title="Click for last-decision detail">
       <div class="agent-card-header">
         <div class="agent-avatar" style="background:${color}">${escapeHtml(initial)}</div>
         <span class="agent-name" title="${escapeHtml(agent.id)}">${escapeHtml(agent.id)}</span>
@@ -1594,9 +1605,212 @@ document.getElementById('event-modal').addEventListener('click', (e) => {
   if (e.target === e.currentTarget) closeModal();
 });
 
+// ── Agent Detail Modal ──
+let agentSkillChartInstance = null;
+
+async function openAgentDetail(agentId) {
+  const titleEl = document.getElementById('agent-modal-title');
+  const bodyEl = document.getElementById('agent-modal-body');
+  const overlay = document.getElementById('agent-modal');
+  titleEl.textContent = `🤖 ${agentId}`;
+  bodyEl.innerHTML = '<p style="color:var(--text-muted)">Loading…</p>';
+  overlay.classList.add('active');
+
+  const [agentRes, decisionRes, skillRes] = await Promise.allSettled([
+    authFetch(`/api/agents/${encodeURIComponent(agentId)}`).then(r => r.ok ? r.json() : null),
+    authFetch(`/api/agents/${encodeURIComponent(agentId)}/last-decision`).then(r => r.ok ? r.json() : null),
+    authFetch(`/api/agents/${encodeURIComponent(agentId)}/skill-timeline`).then(r => r.ok ? r.json() : []),
+  ]);
+  const agent = agentRes.status === 'fulfilled' ? agentRes.value : null;
+  const decision = decisionRes.status === 'fulfilled' ? decisionRes.value : null;
+  const skillTimeline = skillRes.status === 'fulfilled' ? skillRes.value : [];
+
+  if (!agent && !decision) {
+    bodyEl.innerHTML = '<p style="color:var(--red)">Failed to load agent</p>';
+    return;
+  }
+  bodyEl.innerHTML = renderAgentDetail(agent, decision, skillTimeline);
+  // Mount the chart only after the canvas is in the DOM.
+  if (agentSkillChartInstance) { agentSkillChartInstance.destroy(); agentSkillChartInstance = null; }
+  const canvas = document.getElementById('agent-skill-chart');
+  if (canvas && Array.isArray(skillTimeline) && skillTimeline.length > 0) {
+    agentSkillChartInstance = buildAgentSkillChart(canvas, skillTimeline);
+  }
+}
+
+function closeAgentModal() {
+  document.getElementById('agent-modal').classList.remove('active');
+  if (agentSkillChartInstance) { agentSkillChartInstance.destroy(); agentSkillChartInstance = null; }
+}
+
+document.getElementById('agent-modal').addEventListener('click', (e) => {
+  if (e.target === e.currentTarget) closeAgentModal();
+});
+
+function renderAgentDetail(agent, decision, skillTimeline) {
+  const id = agent?.id || '(unknown)';
+  const persona = agent?.genome?.personaName || 'unknown';
+  const gender = agent?.diploidGenome?.gender || agent?.gender || '—';
+  const traits = (agent?.genome?.traits || []).join(', ') || '—';
+  const skills = agent?.genome?.skills || {};
+  const fitness = (agent?.fitness ?? 0).toFixed(1);
+  const tokens = (agent?.tokenBalance ?? 0).toLocaleString();
+  const rep = (agent?.reputation ?? 0).toFixed(2);
+
+  let header = `
+    <div class="modal-detail-row"><span class="modal-detail-label">Persona</span><span class="modal-detail-value">${escapeHtml(persona)}</span></div>
+    <div class="modal-detail-row"><span class="modal-detail-label">Generation</span><span class="modal-detail-value">${agent?.generation ?? '—'}</span></div>
+    <div class="modal-detail-row"><span class="modal-detail-label">Age</span><span class="modal-detail-value">${agent?.age ?? '—'} cycles</span></div>
+    <div class="modal-detail-row"><span class="modal-detail-label">Gender</span><span class="modal-detail-value">${escapeHtml(gender)}</span></div>
+    <div class="modal-detail-row"><span class="modal-detail-label">Traits</span><span class="modal-detail-value">${escapeHtml(traits)}</span></div>
+    <div class="modal-detail-row"><span class="modal-detail-label">Fitness</span><span class="modal-detail-value">${fitness}</span></div>
+    <div class="modal-detail-row"><span class="modal-detail-label">Reputation</span><span class="modal-detail-value">${rep}</span></div>
+    <div class="modal-detail-row"><span class="modal-detail-label">Tokens</span><span class="modal-detail-value">${tokens}</span></div>
+  `;
+
+  const skillsHtml = Object.keys(skills).length === 0 ? '' : `
+    <div class="modal-section-title">🎯 Skills (expressed)</div>
+    <div style="display:grid;grid-template-columns:auto 1fr auto;gap:0.4rem 0.8rem;font-size:0.82rem;">
+      ${Object.entries(skills).map(([s, v]) => {
+        const pct = Math.max(0, Math.min(100, Number(v) * 100));
+        return `
+          <span style="color:var(--text-muted)">${escapeHtml(s)}</span>
+          <div style="background:var(--bg-deep);border-radius:3px;overflow:hidden;height:0.6rem;align-self:center;">
+            <div style="width:${pct}%;background:var(--accent);height:100%;"></div>
+          </div>
+          <span>${pct.toFixed(0)}%</span>
+        `;
+      }).join('')}
+    </div>
+  `;
+
+  let decisionHtml;
+  if (!decision) {
+    decisionHtml = `<div class="modal-section-title">🧠 Last Decision</div>
+      <p style="color:var(--text-muted);font-size:0.82rem;">No decision snapshot yet — agent hasn't completed a cycle since last-decision.json was introduced.</p>`;
+  } else {
+    const explore = decision.phases?.explore;
+    const evaluate = decision.phases?.evaluate;
+    const fallback = decision.fallbackReason
+      ? `<div class="modal-detail-row"><span class="modal-detail-label">Fallback</span><span class="modal-detail-value" style="color:var(--red)">${escapeHtml(decision.fallbackReason)}</span></div>`
+      : '';
+    decisionHtml = `
+      <div class="modal-section-title">🧠 Last Decision (cycle ${decision.cycle})</div>
+      <div class="modal-detail-row"><span class="modal-detail-label">Action</span><span class="modal-detail-value"><b>${escapeHtml(decision.action)}</b></span></div>
+      <div class="modal-detail-row"><span class="modal-detail-label">Reasoning</span><span class="modal-detail-value">${escapeHtml(decision.reasoning || '—')}</span></div>
+      ${fallback}
+      ${renderPhaseExplore(explore)}
+      ${renderPhaseEvaluate(evaluate)}
+    `;
+  }
+
+  // Per-agent skill timeline chart, only rendered when there are
+  // attributions for this agent (otherwise it'd be a permanently
+  // empty canvas wasting modal real estate).
+  const hasSkillData = Array.isArray(skillTimeline) && skillTimeline.some(s =>
+    Object.values(s.skills || {}).some(v => v.sampleSize > 0));
+  const skillChartHtml = hasSkillData ? `
+    <div class="modal-section-title">📈 Skill learning curve</div>
+    <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:0.3rem;">
+      Rolling success rate (last 10 attributions) per skill, snapshotted at each cycle_end.
+    </div>
+    <div style="height:200px;"><canvas id="agent-skill-chart"></canvas></div>
+  ` : `
+    <div class="modal-section-title">📈 Skill learning curve</div>
+    <p style="color:var(--text-muted);font-size:0.82rem;">No skill_attributed events for this agent yet — they need to win or definitively fail a bounty before a learning curve can plot.</p>
+  `;
+
+  return header + skillsHtml + decisionHtml + skillChartHtml;
+}
+
+function buildAgentSkillChart(canvas, timeline) {
+  const labels = timeline.map(s => `C${s.cycle}`);
+  const skills = Object.keys(SKILL_COLORS);
+  const datasets = skills.map(skill => {
+    const data = timeline.map(s => (s.skills[skill]?.rate ?? null));
+    const sampleSizes = timeline.map(s => s.skills[skill]?.sampleSize ?? 0);
+    return {
+      label: skill,
+      data,
+      sampleSizes,
+      borderColor: SKILL_COLORS[skill],
+      backgroundColor: SKILL_COLORS[skill] + '22',
+      tension: 0.25,
+      spanGaps: true,
+      pointRadius: 2,
+    };
+  }).filter(d => d.data.some(v => v !== null));
+  return new Chart(canvas.getContext('2d'), {
+    type: 'line',
+    data: { labels, datasets },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      color: '#8b949e',
+      plugins: {
+        legend: { position: 'top', labels: { boxWidth: 8, color: '#8b949e', font: { size: 10 } } },
+        tooltip: {
+          callbacks: {
+            label: (ctx) => {
+              const meta = ctx.dataset.sampleSizes && ctx.dataset.sampleSizes[ctx.dataIndex];
+              const rate = (ctx.parsed.y * 100).toFixed(0);
+              return meta !== undefined
+                ? `${ctx.dataset.label}: ${rate}% (n=${meta})`
+                : `${ctx.dataset.label}: ${rate}%`;
+            },
+          },
+        },
+      },
+      scales: {
+        x: { ticks: { color: '#6e7681', maxTicksLimit: 8 }, grid: { color: '#21262d' } },
+        y: {
+          beginAtZero: true, max: 1,
+          ticks: { color: '#6e7681', callback: (v) => `${(v * 100).toFixed(0)}%` },
+          grid: { color: '#21262d' },
+        },
+      },
+    },
+  });
+}
+
+function renderPhaseExplore(explore) {
+  if (!explore) return '';
+  const obs = (explore.observations || []).map(o => `<li>${escapeHtml(o)}</li>`).join('');
+  return `
+    <div class="modal-section-title">🔭 Explore phase</div>
+    <div class="modal-detail-row"><span class="modal-detail-label">Focus</span><span class="modal-detail-value">${escapeHtml(explore.focus_area || '—')}</span></div>
+    ${obs ? `<ul style="margin:0.3rem 0 0.5rem 1rem;padding:0;font-size:0.82rem;color:var(--text);">${obs}</ul>` : ''}
+  `;
+}
+
+function renderPhaseEvaluate(evaluate) {
+  if (!evaluate) return '';
+  const candidates = evaluate.candidates || [];
+  const top = evaluate.top_choice;
+  const rows = candidates.map(c => `
+    <tr>
+      <td style="padding:0.15rem 0.5rem;${c.action === top ? 'font-weight:bold;color:var(--accent);' : ''}">${escapeHtml(c.action)}</td>
+      <td style="padding:0.15rem 0.5rem;text-align:right;">${(c.expected_value ?? 0).toFixed(1)}</td>
+      <td style="padding:0.15rem 0.5rem;color:var(--text-muted);">${escapeHtml(c.why || '')}</td>
+    </tr>
+  `).join('');
+  return `
+    <div class="modal-section-title">⚖️ Evaluate phase</div>
+    <div class="modal-detail-row"><span class="modal-detail-label">Top choice</span><span class="modal-detail-value">${escapeHtml(top || '—')}</span></div>
+    ${candidates.length > 0 ? `
+      <table style="width:100%;border-collapse:collapse;font-size:0.82rem;margin-top:0.3rem;">
+        <thead><tr style="color:var(--text-muted);text-align:left;">
+          <th style="padding:0.15rem 0.5rem;">Action</th>
+          <th style="padding:0.15rem 0.5rem;text-align:right;">EV</th>
+          <th style="padding:0.15rem 0.5rem;">Why</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>` : ''}
+  `;
+}
+
 // Close modal on Escape key
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') closeModal();
+  if (e.key === 'Escape') { closeModal(); closeAgentModal(); }
 });
 
 // ── Event Filter ──
