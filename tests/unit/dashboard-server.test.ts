@@ -608,6 +608,22 @@ describe('Dashboard Server', () => {
       expect(body.minCycle).toBe(5);
       expect(body.maxCycle).toBe(7);
     });
+
+    it('reflects new appends to events.jsonl on the next request (mtime cache invalidation)', async () => {
+      // Snapshot existing range, append a higher-cycle marker, hit the
+      // endpoint again, and verify the new max shows up. Guards against
+      // a future cache that forgets to invalidate.
+      const before = await (await authedFetch(`${baseUrl}/api/events/cycle-range`)).json() as { maxCycle: number | null };
+      const eventLog = new EventLog(TMP_DIR);
+      const newCycle = (before.maxCycle ?? 0) + 100;
+      // Two cycle markers — one tiny mtime tick should be enough on
+      // ext4/APFS, but writing two bumps it for sure on coarse-grained
+      // filesystems too.
+      await eventLog.append({ type: 'cycle_start', agentId: 'supervisor', actorType: 'supervisor', data: { cycle: newCycle } });
+      await eventLog.append({ type: 'cycle_end', agentId: 'supervisor', actorType: 'supervisor', data: { cycle: newCycle } });
+      const after = await (await authedFetch(`${baseUrl}/api/events/cycle-range`)).json() as { maxCycle: number | null };
+      expect(after.maxCycle).toBe(newCycle);
+    });
   });
 
   describe('GET /api/skills/timeline', () => {

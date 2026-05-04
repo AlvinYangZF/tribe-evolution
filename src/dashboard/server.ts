@@ -154,11 +154,32 @@ const agentsDir = path.join(ecosystemDir, 'agents');
     }
   }
 
+  // Cached snapshot of the parsed event log, invalidated whenever the
+  // backing file's mtime changes. Without this, every /api/events,
+  // /api/events/cycle-range, /api/skills/timeline call re-reads and
+  // re-parses the entire JSONL — O(N) per request and a perf wall once
+  // the log grows. mtime moves on every supervisor append, so the
+  // invalidation is automatic and lock-free.
+  const eventLogPath = path.join(ecosystemDir, 'event-log', 'events.jsonl');
+  let eventsCache: { mtimeMs: number; events: EventLogEntry[] } | null = null;
+
   async function loadAllEvents(): Promise<EventLogEntry[]> {
+    let mtimeMs = 0;
+    try {
+      const st = await fs.stat(eventLogPath);
+      mtimeMs = st.mtimeMs;
+    } catch {
+      // File doesn't exist yet — no events to return.
+      return [];
+    }
+    if (eventsCache && eventsCache.mtimeMs === mtimeMs) {
+      return eventsCache.events;
+    }
     const all: EventLogEntry[] = [];
     for await (const entry of eventLog.replay(0)) {
       all.push(entry);
     }
+    eventsCache = { mtimeMs, events: all };
     return all;
   }
 
