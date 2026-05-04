@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import { WebSocketServer, WebSocket } from 'ws';
 import { EventLog } from '../supervisor/event-log.js';
+import { readLastDecision } from '../supervisor/workspace.js';
 import type { AgentState, EventLogEntry, Resource, Deal, EventType, Bounty, BountyStatus, Bid } from '../shared/types.js';
 import { safeReadJSON, safeWriteJSON } from '../shared/filesystem.js';
 
@@ -521,6 +522,28 @@ const agentsDir = path.join(ecosystemDir, 'agents');
         await refreshCache();
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(cachedAgents));
+        return;
+      }
+
+      // Per-agent debug snapshot of the latest decide() result, including
+      // explore/evaluate phase outputs. Must come BEFORE the generic
+      // /api/agents/:id handler below; otherwise the slice() there treats
+      // ":id/last-decision" as the agent id and 404s.
+      if (pathname.startsWith('/api/agents/') && pathname.endsWith('/last-decision') && req.method === 'GET') {
+        const agentId = pathname.slice('/api/agents/'.length, -'/last-decision'.length);
+        if (!agentId) {
+          res.writeHead(400);
+          res.end(JSON.stringify({ error: 'Missing agent ID' }));
+          return;
+        }
+        const snapshot = await readLastDecision(ecosystemDir, agentId);
+        if (!snapshot) {
+          res.writeHead(404);
+          res.end(JSON.stringify({ error: 'No decision snapshot yet' }));
+          return;
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(snapshot));
         return;
       }
 

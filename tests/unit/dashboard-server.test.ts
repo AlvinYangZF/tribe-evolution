@@ -129,6 +129,37 @@ describe('Dashboard Server', () => {
       const res = await authedFetch(`${baseUrl}/api/agents/nonexistent`);
       expect(res.status).toBe(404);
     });
+
+    it('GET /api/agents/:id/last-decision returns 404 when no snapshot has been written', async () => {
+      const res = await authedFetch(`${baseUrl}/api/agents/agent_001/last-decision`);
+      expect(res.status).toBe(404);
+    });
+
+    it('GET /api/agents/:id/last-decision returns the snapshot when one exists', async () => {
+      // Seed a last-decision.json file directly. Mirrors what
+      // writeLastDecision in workspace.ts produces.
+      const dir = path.join(TMP_DIR, 'workspaces', 'agent_001');
+      await fs.mkdir(dir, { recursive: true });
+      const snapshot = {
+        cycle: 42,
+        timestamp: 1700000000000,
+        action: 'bid_bounty',
+        reasoning: 'going for it',
+        phases: {
+          explore: { observations: ['low tokens'], focus_area: 'earn' },
+          evaluate: { candidates: [{ action: 'bid_bounty', why: 'fastest', expected_value: 70 }], top_choice: 'bid_bounty' },
+        },
+      };
+      await fs.writeFile(path.join(dir, 'last-decision.json'), JSON.stringify(snapshot, null, 2), 'utf-8');
+
+      const res = await authedFetch(`${baseUrl}/api/agents/agent_001/last-decision`);
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.cycle).toBe(42);
+      expect(body.action).toBe('bid_bounty');
+      expect(body.phases?.explore?.focus_area).toBe('earn');
+      expect(body.phases?.evaluate?.top_choice).toBe('bid_bounty');
+    });
   });
 
   describe('WebSocket', () => {
