@@ -16,7 +16,7 @@ import { ensureDir, safeWriteJSON } from '../shared/filesystem.js';
 import { BountyBoard } from './bounty-board.js';
 import { Treasury } from './treasury.js';
 import { attributeBountyOutcome, evaluateSkillPromotion, verdictToDelta } from './skill-evaluator.js';
-import { readMemory, writeMemory, inheritMemory, MEMORY_LIMIT_BYTES } from './workspace.js';
+import { readMemory, writeMemory, inheritMemory, MEMORY_LIMIT_BYTES, type Summarizer } from './workspace.js';
 import type { AgentState, SkillName } from '../shared/types.js';
 
 const ALL_SKILL_NAMES: SkillName[] = ['web_search', 'code_write', 'data_analyze', 'artifact_write', 'observe', 'propose'];
@@ -449,6 +449,33 @@ export class Supervisor extends EventEmitter {
     await safeWriteJSON(path.join(this.config.ecosystemDir, 'agents', `${agent.id}.json`), agent);
   }
 
+  /**
+   * Compact a parent agent's notes into a shorter inheritance payload via
+   * the LLM. Bound to `this` so it can be passed as a callback into
+   * `inheritMemory`. Attributed to 'supervisor' (system service) — does not
+   * debit any agent's token balance.
+   *
+   * Returns the LLM's summary on success, or throws on failure / empty
+   * output so the caller can fall back to verbatim.
+   */
+  private summarizeForInheritance: Summarizer = async (text, maxBytes) => {
+    const sys = `You compact a parent AI agent's notes into the shortest payload that preserves its most actionable lessons for a child agent. Output the summary text only — no preamble, no JSON, no headers. Aim for ${maxBytes} bytes or fewer.`;
+    const user = `Parent notes:\n\n${text}\n\nSummary:`;
+    const resp = await proxyCall({
+      requestId: `summarize-inheritance-${Date.now()}`,
+      agentId: 'supervisor',
+      model: 'deepseek-chat',
+      messages: [
+        { role: 'system', content: sys },
+        { role: 'user', content: user },
+      ],
+      maxTokens: 400,
+    });
+    const out = (resp.content ?? '').trim();
+    if (!out) throw new Error('empty summary');
+    return out;
+  };
+
   private async runCycle(cycleNum: number): Promise<void> {
     await this.eventLog.append({ type: 'cycle_start', agentId: 'supervisor', actorType: 'supervisor', data: { cycle: cycleNum } });
     console.log(`\n🔄 Cycle ${cycleNum} — ${this.agents.size} agents`);
@@ -521,12 +548,15 @@ export class Supervisor extends EventEmitter {
     for (const a of newBorns) {
       await this.eventLog.append({ type: 'agent_born', agentId: a.id, actorType: 'agent', data: { generation: a.generation, parentId: a.parentId, personaName: a.genome.personaName } });
       // Inherit memory from a random parent (or the single parent for asexual
-      // offspring). Best-effort — failure here doesn't block the cycle.
+      // offspring). The summarizer compacts long parent notes via the LLM so
+      // multi-generation inheritance doesn't bloat. Both inheritMemory and
+      // the summarizer are best-effort — failure falls back to verbatim and
+      // a verbatim failure is logged but doesn't block the cycle.
       const parents = a.parentIds && a.parentIds.length > 0 ? a.parentIds : (a.parentId ? [a.parentId] : []);
       if (parents.length > 0) {
         const chosen = parents[Math.floor(Math.random() * parents.length)];
         try {
-          await inheritMemory(this.config.ecosystemDir, chosen, a.id);
+          await inheritMemory(this.config.ecosystemDir, chosen, a.id, this.summarizeForInheritance);
         } catch (err: unknown) {
           const m = err instanceof Error ? err.message : String(err);
           console.warn(`  ⚠️ Memory inheritance failed for ${a.id}: ${m}`);
