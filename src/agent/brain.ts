@@ -55,6 +55,13 @@ export interface AgentDecision {
   fallbackReason?: DecisionFallbackReason;
   /** Truncated raw LLM output. Only set on parse/schema fallbacks. */
   rawResponse?: string;
+  /** Per-phase outputs from the three-phase decide() pipeline, kept for
+   *  debug / observability. Either side can be null when the phase parsed
+   *  to an empty/malformed result and the pipeline degraded gracefully. */
+  phases?: {
+    explore?: ExploreOutput | null;
+    evaluate?: EvaluateOutput | null;
+  };
 }
 
 /** Subset of AgentState needed by the brain prompt */
@@ -386,6 +393,7 @@ export async function decide(
       params: {},
       reasoning: `LLM call failed: ${err instanceof Error ? err.message : String(err)}`,
       fallbackReason: 'llm_error',
+      phases: { explore: null },
     };
   }
 
@@ -400,19 +408,22 @@ export async function decide(
       params: {},
       reasoning: `LLM call failed: ${err instanceof Error ? err.message : String(err)}`,
       fallbackReason: 'llm_error',
+      phases: { explore, evaluate: null },
     };
   }
 
   // Phase 3: execute — collapses to idle on any failure (preserved by parseDecision)
   try {
     const raw = await callLLM(systemPrompt, executePromptFor(explore, evaluate), { maxTokens: PHASE_BUDGETS.execute, phase: 'execute' });
-    return parseDecision(raw);
+    const decision = parseDecision(raw);
+    return { ...decision, phases: { explore, evaluate } };
   } catch (err) {
     return {
       action: 'idle',
       params: {},
       reasoning: `LLM call failed: ${err instanceof Error ? err.message : String(err)}`,
       fallbackReason: 'llm_error',
+      phases: { explore, evaluate },
     };
   }
 }

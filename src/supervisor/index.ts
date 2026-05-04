@@ -17,7 +17,7 @@ import { BountyBoard } from './bounty-board.js';
 import { Treasury } from './treasury.js';
 import { TokenLedger } from './token-ledger.js';
 import { attributeBountyOutcome, evaluateSkillPromotion, verdictToDelta } from './skill-evaluator.js';
-import { readMemory, writeMemory, inheritMemory, summarizeOwnMemory, MEMORY_LIMIT_BYTES, type Summarizer } from './workspace.js';
+import { readMemory, writeMemory, inheritMemory, summarizeOwnMemory, writeLastDecision, MEMORY_LIMIT_BYTES, type Summarizer } from './workspace.js';
 import type { AgentState, SkillName } from '../shared/types.js';
 
 const ALL_SKILL_NAMES: SkillName[] = ['web_search', 'code_write', 'data_analyze', 'artifact_write', 'observe', 'propose'];
@@ -147,6 +147,24 @@ async function decideForAgent(
       openBounties: snapshot.openBounties,
       topBountyReward: snapshot.topBountyReward,
     }, llmCall);
+
+    // Persist a per-agent debug snapshot of the latest decision (final
+    // action + per-phase outputs from the three-phase pipeline). This is
+    // best-effort: a failure here shouldn't block the cycle, since the
+    // canonical record is the eventLog. Overwritten every cycle.
+    try {
+      await writeLastDecision(ecosystemDir, agent.id, {
+        cycle: cycleNum,
+        timestamp: Date.now(),
+        action: decision.action,
+        reasoning: decision.reasoning,
+        ...(decision.fallbackReason ? { fallbackReason: decision.fallbackReason } : {}),
+        ...(decision.phases ? { phases: decision.phases } : {}),
+      });
+    } catch (err: unknown) {
+      const m = err instanceof Error ? err.message : String(err);
+      console.warn(`  ⚠️ ${agent.id} last-decision snapshot failed: ${m}`);
+    }
 
     // Surface malformed LLM output to the audit trail. We still treat the
     // decision as idle (decide() guarantees never to throw), but the event

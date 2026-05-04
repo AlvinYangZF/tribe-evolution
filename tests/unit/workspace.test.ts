@@ -7,6 +7,8 @@ import {
   writeMemory,
   inheritMemory,
   summarizeOwnMemory,
+  writeLastDecision,
+  readLastDecision,
   MEMORY_LIMIT_BYTES,
   SUMMARIZE_MIN_BYTES,
 } from '../../src/supervisor/workspace.js';
@@ -193,5 +195,63 @@ describe('summarizeOwnMemory', () => {
     expect(result.summarized).toBe(false);
     expect(result.reason).toBe('empty_summary');
     expect(await readMemory(ECO_DIR, 'a1')).toBe(LONG_NOTES);
+  });
+});
+
+describe('writeLastDecision / readLastDecision', () => {
+  it('returns null when no snapshot has been written yet', async () => {
+    expect(await readLastDecision(ECO_DIR, 'fresh')).toBeNull();
+  });
+
+  it('writes a snapshot and reads it back exactly', async () => {
+    const snapshot = {
+      cycle: 7,
+      timestamp: 1700000000000,
+      action: 'bid_bounty',
+      reasoning: 'going for it',
+      phases: {
+        explore: { observations: ['low tokens'], focus_area: 'earn tokens' },
+        evaluate: {
+          candidates: [{ action: 'bid_bounty', why: 'fastest', expected_value: 70 }],
+          top_choice: 'bid_bounty',
+        },
+      },
+    };
+    await writeLastDecision(ECO_DIR, 'a1', snapshot);
+    const read = await readLastDecision(ECO_DIR, 'a1');
+    expect(read).toEqual(snapshot);
+  });
+
+  it('overwrites the previous snapshot (no append, no history)', async () => {
+    await writeLastDecision(ECO_DIR, 'a1', {
+      cycle: 1, timestamp: 1, action: 'idle', reasoning: 'first',
+    });
+    await writeLastDecision(ECO_DIR, 'a1', {
+      cycle: 2, timestamp: 2, action: 'observe', reasoning: 'second',
+    });
+    const read = await readLastDecision(ECO_DIR, 'a1');
+    expect(read?.cycle).toBe(2);
+    expect(read?.action).toBe('observe');
+  });
+
+  it('creates the workspace directory on demand', async () => {
+    await writeLastDecision(ECO_DIR, 'new-agent', {
+      cycle: 1, timestamp: 1, action: 'idle', reasoning: 'first cycle',
+    });
+    const filePath = path.join(ECO_DIR, 'workspaces', 'new-agent', 'last-decision.json');
+    const stat = await fs.stat(filePath);
+    expect(stat.isFile()).toBe(true);
+  });
+
+  it('preserves optional fields like fallbackReason when set', async () => {
+    await writeLastDecision(ECO_DIR, 'a1', {
+      cycle: 5,
+      timestamp: 1,
+      action: 'idle',
+      reasoning: 'LLM call failed',
+      fallbackReason: 'llm_error',
+    });
+    const read = await readLastDecision(ECO_DIR, 'a1');
+    expect(read?.fallbackReason).toBe('llm_error');
   });
 });
