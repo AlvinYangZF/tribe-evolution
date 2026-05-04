@@ -16,8 +16,16 @@ export class TokenLedger {
   private cycleTokenUsage = 0;
   private lastDeductedTokens = 0;
 
-  /** Add `tokens` to this cycle's running total. */
+  /**
+   * Add `tokens` to this cycle's running total. Negative input almost
+   * always indicates a bug at the call site — we drop it but warn so the
+   * misuse is at least visible in dev/test logs.
+   */
   recordUsage(tokens: number): void {
+    if (tokens < 0) {
+      console.warn(`TokenLedger: ignoring negative usage value (${tokens})`);
+      return;
+    }
     if (tokens > 0) this.cycleTokenUsage += tokens;
   }
 
@@ -26,17 +34,19 @@ export class TokenLedger {
     return this.cycleTokenUsage;
   }
 
-  /** Tokens recorded since the last `markDeducted()` call. */
+  /** Tokens recorded since the last `settle()` call. */
   pendingDelta(): number {
     return this.cycleTokenUsage - this.lastDeductedTokens;
   }
 
   /**
-   * Acknowledge that the caller has deducted `pendingDelta()` from the
-   * agent's balance. Returns the same value. Subsequent `pendingDelta()`
-   * calls return 0 until more usage is recorded.
+   * Acknowledge that the caller is deducting `pendingDelta()` from the
+   * agent's balance and reset the watermark. Returns the same value.
+   * Subsequent `pendingDelta()` calls return 0 until more usage is
+   * recorded. Idempotent: calling settle() with no new usage returns 0
+   * every time without side effects.
    */
-  markDeducted(): number {
+  settle(): number {
     const delta = this.pendingDelta();
     this.lastDeductedTokens = this.cycleTokenUsage;
     return delta;

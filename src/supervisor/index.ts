@@ -119,9 +119,15 @@ async function decideForAgent(
       return resp.content;
     };
     const flushTokenUsage = async () => {
-      const delta = ledger.markDeducted();
+      const delta = ledger.settle();
       if (delta > 0) {
         agent.tokenBalance = Math.max(0, agent.tokenBalance - delta);
+        // TODO: this isn't transactional — if saveAgent throws, the
+        // in-memory balance has already been debited but the on-disk
+        // copy hasn't. The watermark is also already advanced, so a
+        // retry would re-debit nothing on disk. A proper fix would
+        // snapshot the balance, save first, and roll back the ledger
+        // on failure. Pre-existing shape from PR #20; out of scope here.
         await saveAgent(agent);
       }
     };
